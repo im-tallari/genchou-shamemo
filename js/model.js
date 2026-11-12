@@ -21,7 +21,7 @@ export function createProject(name, photoNumbering = 'sequential') {
     updatedAt: now,
     settings: { photoNumbering },
     // 写真番号の採番カウンタ。元に戻すの対象外（番号は再利用しない）
-    counters: { sequential: 0, daily: {} },
+    counters: { sequential: 0, daily: {}, memo: 0 },
     drawings: [],
     rooms: [],
     objects: [],
@@ -36,12 +36,30 @@ export function normalizeProject(p) {
   p.drawings = p.drawings || [];
   p.rooms = p.rooms || [];
   p.objects = p.objects || [];
+  // メモ番号：番号のないメモ（第2段階以前に作成）には作成順に振る
+  let max = p.counters.memo || 0;
+  for (const o of p.objects) {
+    const m = o.type === 'memo' && /^M(\d+)$/.exec(o.number || '');
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  for (const o of p.objects) if (o.type === 'memo' && !o.number) o.number = formatMemoNumber(++max);
+  p.counters.memo = max;
   p.formatVersion = FORMAT_VERSION;
   return p;
 }
 
 export function ymd(d = new Date()) {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatMemoNumber(n) {
+  return 'M' + String(n).padStart(3, '0');
+}
+
+/** 次のメモ番号（M001, M002, …）。削除しても番号は再利用しない */
+export function nextMemoNumber(project) {
+  project.counters.memo = (project.counters.memo || 0) + 1;
+  return formatMemoNumber(project.counters.memo);
 }
 
 /** 次の写真番号を採番する（カウンタを進める） */

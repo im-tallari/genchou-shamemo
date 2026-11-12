@@ -2,7 +2,7 @@
 // 下の PRECACHE と VERSION は scripts/gen-precache.mjs で自動生成する（手で編集しない）
 
 // <precache>
-const VERSION = '8f4a99bc308c';
+const VERSION = '2eb33e06dbb2';
 const PRECACHE = [
  "./",
  "./index.html",
@@ -10,6 +10,10 @@ const PRECACHE = [
  "./css/app.css",
  "./js/db.js",
  "./js/drawing-source.js",
+ "./js/export/excel.js",
+ "./js/export/lazy.js",
+ "./js/export/pdf.js",
+ "./js/export/render.js",
  "./js/image.js",
  "./js/main.js",
  "./js/model.js",
@@ -24,6 +28,7 @@ const PRECACHE = [
  "./js/ui/icons.js",
  "./js/ui/install.js",
  "./js/ui/memo.js",
+ "./js/ui/output.js",
  "./js/ui/photo.js",
  "./js/ui/tool-options.js",
  "./js/viewer.js",
@@ -33,7 +38,9 @@ const PRECACHE = [
  "./icons/icon-512.png",
  "./icons/icon-maskable-512.png",
  "./icons/icon.svg",
+ "./vendor/exceljs/exceljs.min.js",
  "./vendor/jszip/jszip.min.js",
+ "./vendor/pdf-lib/pdf-lib.min.js",
  "./vendor/pdfjs/cmaps/78-EUC-H.bcmap",
  "./vendor/pdfjs/cmaps/78-EUC-V.bcmap",
  "./vendor/pdfjs/cmaps/78-H.bcmap",

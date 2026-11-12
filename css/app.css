@@ -269,3 +269,16 @@ textarea.input { resize: vertical; min-height: 90px; line-height: 1.5; }
   .toggle-btn { padding: 5px 8px; min-width: 32px; }
   .modal-full .modal-foot .btn { padding: 8px 10px; }
 }
+
+/* ---- 第3段階：出力 ---- */
+.busy-box div:last-child { white-space: pre-line; }
+.check-list { max-height: 40vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; }
+.check-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+.check-row input { width: 20px; height: 20px; accent-color: var(--accent); flex-shrink: 0; }
+.check-group { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.check-group:last-child { border-bottom: 0; }
+.check-group-title { font-weight: 600; padding: 4px 0; }
+.check-group .check-row { padding-left: 12px; }
+.check-tools { display: flex; gap: 16px; }
+.file-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.file-name { flex: 1; min-width: 0; word-break: break-all; }

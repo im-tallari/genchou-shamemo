@@ -32,6 +32,19 @@
 - 表示切替：写真ピン・メモ・手書き・寸法・部屋範囲（端末ごとに保存）。非表示のものはタップ・選択・消しゴムの対象外
 - 写真への書き込み：写真ビューアーで拡大・移動、「書き込み」でペン（蛍光含む）・メモ・消しゴム。元画像は残し、書き込みは別データ。書き込みのある写真はピンに印
 
+### 第3段階
+- メモ番号：作成時にプロジェクト通し番号（M001, M002, …）を付ける。削除しても詰めない。画面の吹き出しにも表示
+- 図面PDF（「⋯」→「図面PDFを出力」）
+  - 出力するページを選択。表示切替で非表示のものは出力しない
+  - PDF図面はページをベクターのまま埋め込み、書き込みは透明画像（最大300dpi相当）にして重ねる
+  - 画像図面は A3 に縦横比を保って収める
+  - ピン・番号札・部屋名は A3 でピンの高さ約4mm（他の用紙は比例）
+  - メモは図面上に番号だけを表示し、本文は「メモ一覧（Excel）」に出力（同時出力を選べる）
+- 写真台帳（Excel、暫定様式）：番号・部屋名・書き込み（有／無）・写真・撮影日時・図面名
+  - 写真は1セルに1枚（長辺1200pxに縮小）、A4縦・見出し行を各ページに印刷
+  - 書き込みのある写真は「合成画像」か「元画像」を出力時に選択
+- メモ一覧（Excel）：番号・図面名・ページ・部屋名（メモの位置の部屋）・本文・手書き（画像）
+
 ## フォルダ構成
 
 ```
@@ -50,9 +63,10 @@ js/
   targets.js            書き込み先（図面 / 写真）の切替
   image.js              写真の縮小（長辺 2560px / JPEG 0.85）
   zip.js                .zip 書き出し／読み込み
-  ui/                   画面とダイアログ（home / editor / photo / memo / dim / delete / tool-options / install / dialogs / icons）
+  export/               出力（pdf.js：図面PDF / excel.js：写真台帳・メモ一覧 / render.js：出力用画像 / lazy.js：ライブラリ遅延読み込み）
+  ui/                   画面とダイアログ（home / editor / photo / memo / dim / delete / output / tool-options / install / dialogs / icons）
 icons/                  アプリアイコン
-vendor/                 外部ライブラリ（PDF.js 4.10.38 legacy build、JSZip 3.10.1）
+vendor/                 外部ライブラリ（PDF.js 4.10.38 legacy build、JSZip 3.10.1、pdf-lib 1.17.1、ExcelJS 4.4.0）
 scripts/gen-precache.mjs  sw.js のキャッシュ対象リストを更新するスクリプト
 ```
 
@@ -85,6 +99,8 @@ node scripts/gen-precache.mjs
   - `drawings[].pages`：各ページの大きさ（図面座標。PDF はポイント、画像はピクセル）
   - `Memo.handwriting`：`{ width, height, strokes: [{ points, width }] }`（手書きパッドの座標）
   - `Photo.width / height`：保存した写真の画素数
+  - `Memo.number`：メモ番号（図面上のメモのみ。写真上のメモには付けない）
+  - `counters.memo`：メモ番号の採番カウンタ
   - `Photo.annotations`：写真への書き込み（Stroke / Memo、座標は写真の画素）
   - `Stroke.highlight`：蛍光ペンなら true
   - `Dimension`：仕様書の `kind` の代わりに次の形で保持
@@ -97,3 +113,5 @@ node scripts/gen-precache.mjs
 
 - [PDF.js](https://github.com/mozilla/pdf.js)（Apache License 2.0）
 - [JSZip](https://github.com/Stuk/jszip)（MIT / GPLv3）
+- [pdf-lib](https://github.com/Hopding/pdf-lib)（MIT）
+- [ExcelJS](https://github.com/exceljs/exceljs)（MIT）

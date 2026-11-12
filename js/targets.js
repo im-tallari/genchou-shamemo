@@ -1,3 +1,5 @@
+import { nextMemoNumber } from './model.js';
+
 // 書き込み先：図面（project.objects）か写真（photo.annotations）か
 // ツールやメモ編集はこのインターフェース経由でオブジェクトを追加・変更・削除する
 
@@ -9,6 +11,7 @@ export function drawingTarget(viewer) {
     add(p, o) {
       o.drawingId = viewer.drawingId;
       o.page = viewer.pageIndex;
+      if (o.type === 'memo' && !o.number) o.number = nextMemoNumber(p);
       p.objects.push(o);
     },
     find: (p, id) => p.objects.find((o) => o.id === id),

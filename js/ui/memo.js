@@ -121,7 +121,7 @@ export async function editMemo(app, memo, pos) {
     h('div', { class: 'muted small' }, 'キーボード入力と手書きは両方使えます'));
 
   const result = await modal({
-    title: memo ? 'メモを編集' : 'メモを追加',
+    title: memo ? `メモを編集${memo.number ? ' ' + memo.number : ''}` : 'メモを追加',
     body,
     buttons: [
       { label: 'キャンセル', value: null },
@@ -165,7 +165,7 @@ export async function openMemo(app, memo) {
     parts.push(canvas);
   }
   const v = await modal({
-    title: 'メモ',
+    title: memo.number ? `メモ ${memo.number}` : 'メモ',
     body: h('div', { class: 'form' }, parts),
     buttons: [
       { label: '削除', kind: 'danger', value: 'delete' },

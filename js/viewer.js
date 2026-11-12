@@ -26,15 +26,18 @@ export const LAYERS = [
 
 export class Viewer {
   /**
-   * options.memoStyle: 'bubble'（図面：1行に省略）| 'full'（写真：全文を写真に固定した大きさで）
+   * options.memoStyle: 'bubble'（図面：番号＋1行に省略）| 'tag'（PDF出力：番号のみ）
+   *                    | 'full'（写真：全文を写真に固定した大きさで）
+   * container=null で画面に出さない描画専用（出力用）になる
    */
   constructor(container, { memoStyle = 'bubble', unitBase = 1190.55 } = {}) {
     this.container = container;
     this.memoStyle = memoStyle;
     this.unitBase = unitBase;
+    this.ui = 1; // 画面上で一定の大きさのもの（ピン・吹き出し・部屋名）の倍率。出力時に使う
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'viewer-canvas';
-    container.appendChild(this.canvas);
+    if (container) container.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d');
     this.dpr = window.devicePixelRatio || 1;
     this.cssW = 0;
@@ -64,6 +67,7 @@ export class Viewer {
     this._raf = 0;
     this.onViewChange = null;
 
+    if (!container) return;
     this._bindInput();
     this._ro = new ResizeObserver(() => this._resize());
     this._ro.observe(container);
@@ -71,7 +75,7 @@ export class Viewer {
   }
 
   destroy() {
-    this._ro.disconnect();
+    if (this._ro) this._ro.disconnect();
     this._cancelDetail();
     cancelAnimationFrame(this._raf);
     this.canvas.remove();
@@ -324,9 +328,10 @@ export class Viewer {
       ctx.fillStyle = 'rgba(0,137,123,0.08)';
       ctx.fill();
     }
+    const ui = this.ui;
     ctx.strokeStyle = ROOM_COLOR;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 2 * ui;
+    ctx.setLineDash([6 * ui, 4 * ui]);
     ctx.stroke();
     ctx.setLineDash([]);
     if (draft) {
@@ -339,10 +344,10 @@ export class Viewer {
       }
     } else if (room.name) {
       const [cx, cy] = this.toScreen(...polygonCentroid(room.polygon));
-      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.font = `bold ${13 * ui}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 4 * ui;
       ctx.strokeStyle = 'rgba(255,255,255,.9)';
       ctx.strokeText(room.name, cx, cy);
       ctx.fillStyle = ROOM_COLOR;
@@ -372,7 +377,7 @@ export class Viewer {
   _dimLayout(ctx, d) {
     const u = this.unit();
     const font = DIM_TEXT_PT * u * this.view.scale; // 図面に連動
-    const lw = Math.max(1, 0.6 * u * this.view.scale);
+    const lw = Math.max(this.ui, 0.6 * u * this.view.scale);
     const gap = font * 0.35;
     const f = (k) => (d.fields || []).includes(k);
     const hText = f('H') ? dimText(d, 'H') : '';
@@ -432,7 +437,7 @@ export class Viewer {
       ctx.moveTo(g.cx - c, g.cy); ctx.lineTo(g.cx + c, g.cy);
       ctx.moveTo(g.cx, g.cy - c); ctx.lineTo(g.cx, g.cy + c);
     } else {
-      const r = 5;
+      const r = 5 * this.ui;
       ctx.arc(g.cx, g.cy, r, 0, Math.PI * 2);
       ctx.moveTo(g.cx - r, g.cy); ctx.lineTo(g.cx + r, g.cy);
       ctx.moveTo(g.cx, g.cy - r); ctx.lineTo(g.cx, g.cy + r);
@@ -493,6 +498,10 @@ export class Viewer {
 
   _pinBox(ctx, o) {
     const [sx, sy] = this.toScreen(o.x, o.y);
+    return this._pinBoxAt(ctx, o, sx, sy);
+  }
+
+  _pinBoxAt(ctx, o, sx, sy) {
     ctx.font = 'bold 12px system-ui, sans-serif';
     const w = Math.max(24, ctx.measureText(this._pinLabel(o)).width + 12);
     const h = 22;
@@ -501,7 +510,11 @@ export class Viewer {
 
   drawPhotoPin(ctx, o) {
     ctx.save();
-    const b = this._pinBox(ctx, o);
+    // ピンの位置を原点にして倍率 ui で描く
+    const [px, py] = this.toScreen(o.x, o.y);
+    ctx.translate(px, py);
+    ctx.scale(this.ui, this.ui);
+    const b = this._pinBoxAt(ctx, o, 0, 0);
     if (o.angle != null) drawArrow(ctx, b.sx, b.sy, o.angle, PIN_COLOR);
     ctx.shadowColor = 'rgba(0,0,0,.3)';
     ctx.shadowBlur = 3;
@@ -533,16 +546,20 @@ export class Viewer {
   // ---- メモ ----
 
   _memoBox(ctx, m) {
-    return this.memoStyle === 'full' ? this._memoBoxFull(ctx, m) : this._memoBoxBubble(ctx, m);
+    if (this.memoStyle === 'full') return this._memoBoxFull(ctx, m);
+    const [sx, sy] = this.toScreen(m.x, m.y);
+    return this._memoBoxBubble(ctx, m, sx, sy);
   }
 
-  _memoBoxBubble(ctx, m) {
-    const [sx, sy] = this.toScreen(m.x, m.y);
+  _memoBoxBubble(ctx, m, sx, sy) {
     const pad = 6;
     const maxW = 180;
+    const tag = this.memoStyle === 'tag';
     ctx.font = '13px system-ui, sans-serif';
-    const text = m.text ? truncate(ctx, firstLine(m.text), maxW - pad * 2) : '';
-    const hasHw = !!(m.handwriting && m.handwriting.strokes && m.handwriting.strokes.length);
+    const head = m.number ? m.number : '';
+    const body = tag ? '' : (m.text ? firstLine(m.text) : '');
+    const text = head || body ? truncate(ctx, [head, body].filter(Boolean).join(' '), maxW - pad * 2) : '';
+    const hasHw = !tag && !!(m.handwriting && m.handwriting.strokes && m.handwriting.strokes.length);
     const thumbW = 96, thumbH = 64;
     let w = 0, h = pad * 2;
     if (text) { w = Math.max(w, ctx.measureText(text).width); h += 16; }
@@ -576,7 +593,16 @@ export class Viewer {
 
   drawMemo(ctx, m) {
     ctx.save();
-    const b = this._memoBox(ctx, m);
+    let b;
+    if (this.memoStyle === 'full') {
+      b = this._memoBoxFull(ctx, m);
+    } else {
+      // 吹き出しは位置を原点にして倍率 ui で描く
+      const [px, py] = this.toScreen(m.x, m.y);
+      ctx.translate(px, py);
+      ctx.scale(this.ui, this.ui);
+      b = this._memoBoxBubble(ctx, m, 0, 0);
+    }
     if (b.tail) {
       ctx.beginPath();
       ctx.moveTo(b.sx, b.sy);

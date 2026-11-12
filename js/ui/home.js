@@ -5,6 +5,8 @@ import { createProject } from '../model.js';
 import { h, modal, confirmDialog, promptDialog, toast, busy, pickFile, formatDate, alertDialog } from './dialogs.js';
 import { exportProject, importProject, downloadBlob, canShareFile, shareBlob } from '../zip.js';
 import { showInstallGuide, storageStatusText, requestPersist } from './install.js';
+import { showAbout } from './about.js';
+import { APP_NAME } from '../version.js';
 
 export class HomeScreen {
   constructor(root, app) {
@@ -25,7 +27,7 @@ export class HomeScreen {
     const projects = await db.listProjects();
     this.root.replaceChildren(
       h('header', { class: 'topbar' },
-        h('div', { class: 'app-title' }, '現地調査'),
+        h('div', { class: 'app-title' }, APP_NAME),
         h('div', { class: 'spacer' }),
         h('button', { class: 'btn ghost', onclick: () => this.importZip() }, '読み込み'),
         h('button', { class: 'btn primary', onclick: () => this.newProject() }, '＋ 新規')),
@@ -36,7 +38,9 @@ export class HomeScreen {
             h('p', {}, 'プロジェクトがありません。'),
             h('p', { class: 'muted' }, '「＋ 新規」で作成するか、書き出した .zip を「読み込み」してください。')),
         h('footer', { class: 'home-foot' },
-          h('button', { class: 'link', onclick: () => showInstallGuide(true) }, 'ホーム画面に追加する方法'),
+          h('div', { class: 'foot-links' },
+            h('button', { class: 'link', onclick: () => showInstallGuide(true) }, 'ホーム画面に追加する方法'),
+            h('button', { class: 'link', onclick: () => showAbout() }, 'このアプリについて')),
           h('span', { class: 'muted small storage-status' }, ''))),
     );
     storageStatusText().then((t) => {

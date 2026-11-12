@@ -36,7 +36,7 @@ export async function exportProject(projectId, onProgress) {
     files[ref] = path;
     zip.file(path, rec.blob, { compression: ext === 'pdf' ? 'DEFLATE' : 'STORE' });
   }
-  const json = { ...project, files, exportedAt: Date.now(), app: 'site-survey' };
+  const json = { ...project, files, exportedAt: Date.now(), app: 'site-survey', appName: '現調写メモ' };
   zip.file('project.json', JSON.stringify(json, null, 1), { compression: 'DEFLATE' });
   const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip' }, (m) => onProgress && onProgress(m.percent));
   return { blob, fileName: exportFileName(project), missing };
@@ -63,6 +63,7 @@ export async function importProject(file, onProgress) {
   delete data.files;
   delete data.exportedAt;
   delete data.app;
+  delete data.appName;
   const project = normalizeProject(data);
   project.id = uid();
   project.updatedAt = Date.now();

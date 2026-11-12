@@ -1,6 +1,7 @@
 // Excel 出力：写真台帳・メモ一覧（暫定様式）
 
 import { loadExcelJS } from './lazy.js';
+import { APP_NAME } from '../version.js';
 import { renderPhoto, renderHandwriting, blobToDataURL } from './render.js';
 import { pointInPolygon } from '../model.js';
 import { formatDate } from '../ui/dialogs.js';
@@ -71,7 +72,7 @@ async function toBlob(wb) {
 
 function newWorkbook(ExcelJS, project) {
   const wb = new ExcelJS.Workbook();
-  wb.creator = '現地調査';
+  wb.creator = APP_NAME;
   wb.created = new Date();
   wb.title = project.name;
   return wb;

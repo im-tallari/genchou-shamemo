@@ -2,6 +2,7 @@
 // 図面 PDF のページはベクターのまま埋め込み、書き込みは透明画像にして重ねる
 
 import * as db from '../db.js';
+import { APP_NAME } from '../version.js';
 import { loadPdfLib } from './lazy.js';
 import { renderOverlay, MAX_CANVAS_PIXELS } from './render.js';
 
@@ -19,8 +20,8 @@ export async function exportDrawingsPdf(project, pages, layers, onProgress = () 
   const { PDFDocument, degrees } = await loadPdfLib();
   const out = await PDFDocument.create();
   out.setTitle(project.name);
-  out.setCreator('現地調査');
-  out.setProducer('現地調査（pdf-lib）');
+  out.setCreator(APP_NAME);
+  out.setProducer(`${APP_NAME}（pdf-lib）`);
 
   const srcDocs = new Map();
   const getSrc = async (drawing) => {

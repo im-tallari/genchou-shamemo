@@ -17,6 +17,7 @@ import { segmented, toggleButton, penOptions } from './tool-options.js';
 import { exportWithDialog } from './home.js';
 import { outputPdfDialog, outputLedgerDialog, outputMemoListDialog } from './output.js';
 import { requestPersist } from './install.js';
+import { showAbout } from './about.js';
 
 const SETTINGS_KEY = 'editor-settings';
 const TOOLS = [
@@ -533,6 +534,7 @@ export class EditorScreen {
       ['outLedger', '写真台帳（Excel）を出力'],
       ['outMemo', 'メモ一覧（Excel）を出力'],
       ['export', '書き出し（.zip）'],
+      ['about', 'このアプリについて'],
     ];
     const v = await modal({
       title: 'メニュー',
@@ -551,6 +553,8 @@ export class EditorScreen {
       outputPdfDialog(this.store.project, this.settings.layers, { drawingId: this.drawingId, pageIndex: this.pageIndex });
     } else if (v === 'outLedger') {
       outputLedgerDialog(this.store.project);
+    } else if (v === 'about') {
+      showAbout();
     } else if (v === 'outMemo') {
       outputMemoListDialog(this.store.project);
     }

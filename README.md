@@ -1,6 +1,6 @@
-# 現地調査（仮称）
+# 現調写メモ
 
-スマホ・タブレットで平面図を開き、写真・メモ・手書きを図面上に記録する現地調査用 Web ツール（PWA）。
+スマホ・タブレットで平面図を開き、写真・メモ・手書き・寸法を図面上に記録する現地調査用 Web ツール（PWA）。
 サーバーは使わず、データはすべて端末内（IndexedDB）に保存します。
 
 ## 実装範囲
@@ -109,9 +109,19 @@ node scripts/gen-precache.mjs
 - 座標はすべて図面座標系（ページの左上が原点、ズームに依存しない）
 - zip：`project.json`、`drawings/<id>.<拡張子>`、`photos/<id>.jpg`
 
+## ライセンス
+
+Copyright (C) 2026 im-tallari
+
+このプログラムはフリーソフトウェアです。GNU Affero General Public License バージョン3、またはそれ以降のバージョン（AGPL-3.0-or-later）の条件で、再配布・改変できます。全文は [LICENSE](LICENSE) を参照してください。
+
+改変したものを配布したり、Web サービスとして公開したりする場合は、そのソースコードも同じ条件で公開する必要があります。
+
+このプログラムは無保証です。
+
 ## 使用ライブラリ
 
 - [PDF.js](https://github.com/mozilla/pdf.js)（Apache License 2.0）
-- [JSZip](https://github.com/Stuk/jszip)（MIT / GPLv3）
+- [JSZip](https://github.com/Stuk/jszip)（MIT / GPLv3 の選択制。MIT を選択）
 - [pdf-lib](https://github.com/Hopding/pdf-lib)（MIT）
 - [ExcelJS](https://github.com/exceljs/exceljs)（MIT）

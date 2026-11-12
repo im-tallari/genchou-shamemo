@@ -1,6 +1,6 @@
 {
-  "name": "現地調査",
-  "short_name": "現地調査",
+  "name": "現調写メモ",
+  "short_name": "現調写メモ",
   "description": "平面図に写真・メモ・手書きを記録する現地調査ツール",
   "lang": "ja",
   "start_url": "./",

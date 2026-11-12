@@ -4,5 +4,5 @@
 export const APP_NAME = '現調写メモ';
 export const APP_VERSION = '1.0.0';
 export const COPYRIGHT = 'Copyright (C) 2026 im-tallari';
-export const SOURCE_URL = 'https://github.com/im-tallari/site-survey';
-export const LICENSE_URL = 'https://github.com/im-tallari/site-survey/blob/main/LICENSE';
+export const SOURCE_URL = 'https://github.com/im-tallari/genchou-shamemo';
+export const LICENSE_URL = 'https://github.com/im-tallari/genchou-shamemo/blob/main/LICENSE';

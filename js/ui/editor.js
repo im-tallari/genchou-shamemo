@@ -1,32 +1,47 @@
 // 編集画面：図面表示・ツールバー・メニュー
 
 import * as db from '../db.js';
-import { uid, normalizeProject, PEN_WIDTHS } from '../model.js';
+import { uid, normalizeProject, PEN_WIDTHS, HL_WIDTHS, DIM_FIELDS, DIM_LABEL, toggleDimField } from '../model.js';
 import { ProjectStore } from '../project-store.js';
-import { Viewer } from '../viewer.js';
+import { Viewer, LAYERS } from '../viewer.js';
 import { openSource, analyze, detectType } from '../drawing-source.js';
-import { ViewTool, CameraTool, RoomTool, MemoTool, PenTool, EraserTool } from '../tools.js';
+import { ViewTool, SelectTool, CameraTool, RoomTool, MemoTool, PenTool, DimTool, EraserTool } from '../tools.js';
+import { drawingTarget } from '../targets.js';
 import { h, modal, toast, busy, pickFile, confirmDialog, promptDialog, alertDialog } from './dialogs.js';
 import { icon } from './icons.js';
 import { capturePhoto, openPhotoViewer } from './photo.js';
 import { editMemo, openMemo, colorPicker } from './memo.js';
+import { editDim } from './dim.js';
+import { deleteWithConfirm } from './delete.js';
+import { segmented, toggleButton, penOptions } from './tool-options.js';
 import { exportWithDialog } from './home.js';
 import { requestPersist } from './install.js';
 
 const SETTINGS_KEY = 'editor-settings';
 const TOOLS = [
   { id: 'view', label: '表示', icon: 'hand' },
+  { id: 'select', label: '選択', icon: 'lasso' },
   { id: 'camera', label: 'カメラ', icon: 'camera' },
   { id: 'room', label: '部屋', icon: 'room' },
   { id: 'memo', label: 'メモ', icon: 'memo' },
   { id: 'pen', label: 'ペン', icon: 'pen' },
+  { id: 'dim', label: '寸法', icon: 'ruler' },
   { id: 'eraser', label: '消しゴム', icon: 'eraser' },
 ];
 
 function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { /* 既定値を使う */ }
-  return { tool: 'view', color: '#e53935', penWidth: PEN_WIDTHS[1].value, cameraMode: 'position', ...s };
+  const d = {
+    tool: 'view', color: '#e53935', cameraMode: 'position',
+    penWidth: PEN_WIDTHS[1].value, highlighter: false, hlWidth: HL_WIDTHS[1].value,
+    dimFields: ['L'],
+    layers: { photo: true, memo: true, stroke: true, dim: true, room: true },
+  };
+  const r = { ...d, ...s };
+  r.layers = { ...d.layers, ...(s.layers || {}) };
+  if (!Array.isArray(r.dimFields) || !r.dimFields.length) r.dimFields = ['L'];
+  return r;
 }
 
 export class EditorScreen {
@@ -62,6 +77,7 @@ export class EditorScreen {
     e.pager = h('div', { class: 'pager' }, e.prev, e.pageLabel, e.next);
     e.undo = h('button', { class: 'icon-btn', 'aria-label': '元に戻す', onclick: () => this.store.undo() }, icon('undo'));
     e.redo = h('button', { class: 'icon-btn', 'aria-label': 'やり直す', onclick: () => this.store.redo() }, icon('redo'));
+    e.layers = h('button', { class: 'icon-btn layers-btn', 'aria-label': '表示切替', onclick: () => this.layersDialog() }, icon('eye'));
     e.saveState = h('span', { class: 'save-state muted small' });
 
     e.stage = h('div', { class: 'stage' });
@@ -79,50 +95,62 @@ export class EditorScreen {
         h('div', { class: 'spacer' }),
         e.pager,
         e.saveState,
-        e.undo, e.redo,
+        e.undo, e.redo, e.layers,
         h('button', { class: 'icon-btn', 'aria-label': '全体表示', onclick: () => this.viewer.fit() }, icon('fit')),
         h('button', { class: 'icon-btn', 'aria-label': 'メニュー', onclick: () => this.menu() }, icon('more'))),
       e.stage, e.empty, e.subbar, e.toolbar);
 
     this.viewer = new Viewer(e.stage);
+    this.viewer.layers = this.settings.layers;
+    this.viewer.objectSource = () => (this.store
+      ? this.store.project.objects.filter((o) => o.drawingId === this.drawingId && o.page === this.pageIndex) : []);
+    this.viewer.roomSource = () => (this.store
+      ? this.store.project.rooms.filter((r) => r.drawingId === this.drawingId && r.page === this.pageIndex) : []);
     this.viewer.onViewChange = (v) => {
       if (this.drawingId) this.viewMemory.set(`${this.drawingId}:${this.pageIndex}`, { ...v });
     };
+    this.target = drawingTarget(this.viewer);
 
     const ctx = this._toolContext();
     this.tools = {
       view: new ViewTool(ctx),
+      select: new SelectTool(ctx),
       camera: new CameraTool(ctx),
       room: new RoomTool(ctx),
       memo: new MemoTool(ctx),
       pen: new PenTool(ctx),
+      dim: new DimTool(ctx),
       eraser: new EraserTool(ctx),
     };
+    this._updateLayersIcon();
   }
 
-  /** ツールに渡す操作窓口 */
+  /** ツール・ダイアログに渡す操作窓口 */
   _toolContext() {
     const self = this;
-    return {
+    const ctx = {
       get store() { return self.store; },
       get viewer() { return self.viewer; },
       get settings() { return self.settings; },
+      get target() { return self.target; },
+      saveSetting: (k, v) => this._set(k, v),
       toast,
-      openPhoto: (p) => openPhotoViewer(this._ctx(), p),
-      openMemo: (m) => openMemo(this._ctx(), m),
-      createMemo: (x, y) => editMemo(this._ctx(), null, { x, y }),
-      capturePhoto: (t) => { requestPersist(); capturePhoto(this._ctx(), t); },
+      openPhoto: (p) => openPhotoViewer(ctx, p),
+      openMemo: (m) => openMemo(ctx, m),
+      createMemo: (x, y) => editMemo(ctx, null, { x, y }),
+      openDim: (d) => editDim(ctx, d),
+      createDim: (d) => editDim(ctx, d, { isNew: true }),
+      capturePhoto: (t) => { requestPersist(); capturePhoto(ctx, t); },
       openRoom: (r) => this.roomMenu(r),
       createRoom: (poly) => this.createRoom(poly),
-      onRoomDraftChange: () => this._renderSubbar(),
+      deleteWithConfirm: (items) => deleteWithConfirm(this.store, this.target, items),
+      onToolStateChange: () => this._renderSubbar(),
     };
+    return ctx;
   }
 
-  _ctx() {
-    return { store: this.store, viewer: this.viewer, settings: this.settings };
-  }
-
-  _saveSettings() {
+  _set(k, v) {
+    this.settings[k] = v;
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); } catch { /* 無視 */ }
   }
 
@@ -140,7 +168,6 @@ export class EditorScreen {
       toast('保存に失敗しました: ' + (ev.detail && ev.detail.message));
     });
     this.store.collectGarbage().catch((e) => console.warn(e));
-    this.viewer.setProject(project);
     this.viewMemory.clear();
     this.root.hidden = false;
     this.setTool(this.settings.tool);
@@ -152,20 +179,19 @@ export class EditorScreen {
 
   async close() {
     if (this.store) await this.store.flush();
-    this.tools.room.deactivate();
+    for (const t of Object.values(this.tools)) if (t.deactivate) t.deactivate();
     if (this.source) this.source.destroy();
     this.source = null;
     this.drawingId = null;
     this.viewer.clearPage();
-    this.viewer.setProject(null);
     this.store = null;
     this.root.hidden = true;
     this.app.showHome();
   }
 
   _onStoreChange() {
-    // 元に戻す等でオブジェクトが入れ替わるので参照を更新
-    this.viewer.setProject(this.store.project);
+    this.tools.select.sync();
+    this.viewer.requestRedraw();
     this._updateHeader();
     this.el.saveState.textContent = '保存中…';
   }
@@ -199,6 +225,7 @@ export class EditorScreen {
     if (!d) return;
     this.el.empty.hidden = true;
     this.tools.room.clear();
+    this.tools.select.clear();
     if (this.drawingId !== drawingId || !this.source) {
       const b = busy('図面を開いています…');
       try {
@@ -299,7 +326,7 @@ export class EditorScreen {
       const p = this.store.project;
       const n = p.objects.filter((o) => o.drawingId === id).length + p.rooms.filter((r) => r.drawingId === id).length;
       const ok = await confirmDialog(
-        `図面「${d.name}」を削除しますか？\nこの図面上の写真・メモ・手書き・部屋（${n}件）もすべて削除されます。\nこの操作は元に戻せません。`,
+        `図面「${d.name}」を削除しますか？\nこの図面上の写真・メモ・手書き・寸法・部屋（${n}件）もすべて削除されます。\nこの操作は元に戻せません。`,
         { okLabel: '削除', danger: true });
       if (!ok) return;
       this.store.mutate((pp) => {
@@ -356,12 +383,7 @@ export class EditorScreen {
         if (rename) for (const o of p.objects) if (o.roomId === room.id) o.roomName = name;
       });
     } else if (v === 'delete') {
-      const ok = await confirmDialog(`部屋「${room.name || '名称なし'}」の範囲を削除しますか？\n写真は削除されず、部屋名もそのまま残ります。`, { okLabel: '削除', danger: true });
-      if (!ok) return;
-      this.store.mutate((p) => {
-        p.rooms = p.rooms.filter((r) => r.id !== room.id);
-        for (const o of p.objects) if (o.roomId === room.id) o.roomId = null;
-      });
+      deleteWithConfirm(this.store, this.target, [room]);
     }
   }
 
@@ -371,8 +393,7 @@ export class EditorScreen {
     if (!this.tools[id]) id = 'view';
     const prev = this.tools[this.settings.tool];
     if (prev && prev !== this.tools[id] && prev.deactivate) prev.deactivate();
-    this.settings.tool = id;
-    this._saveSettings();
+    this._set('tool', id);
     this.viewer.tool = this.tools[id];
     this.viewer.resetGesture();
     for (const b of this.el.toolbar.querySelectorAll('.tool-btn')) b.classList.toggle('on', b.dataset.tool === id);
@@ -382,10 +403,21 @@ export class EditorScreen {
   _renderSubbar() {
     const id = this.settings.tool;
     const sb = this.el.subbar;
-    const set = (k, v) => { this.settings[k] = v; this._saveSettings(); };
+    const set = (k, v) => this._set(k, v);
     let content = [];
     if (id === 'view') {
-      content = [h('span', { class: 'hint' }, '写真ピン・メモをタップで開く／ドラッグで移動／2本指で拡大・縮小')];
+      content = [h('span', { class: 'hint' }, 'タップで開く／長押しで削除／ドラッグで移動／2本指で拡大・縮小')];
+    } else if (id === 'select') {
+      const sel = this.tools.select;
+      content = sel.count
+        ? [
+          h('span', { class: 'hint strong' }, `${sel.count}件選択`),
+          colorPicker(this.settings.color, (c) => { set('color', c); this.applyColorToSelection(c); }),
+          h('button', { class: 'btn small danger', onclick: () => this.deleteSelection() }, '削除'),
+          h('button', { class: 'btn small', onclick: () => sel.clear() }, '解除'),
+          h('span', { class: 'hint' }, '枠内をドラッグで移動'),
+        ]
+        : [h('span', { class: 'hint' }, '指でなぞって囲むと選択（完全に囲まれたもの）／タップで1つ選択')];
     } else if (id === 'camera') {
       const seg = segmented([['position', '位置指定'], ['room', '部屋指定']], this.settings.cameraMode, (v) => {
         set('cameraMode', v);
@@ -408,14 +440,84 @@ export class EditorScreen {
     } else if (id === 'memo') {
       content = [colorPicker(this.settings.color, (c) => set('color', c)), h('span', { class: 'hint' }, 'メモを置く位置をタップ')];
     } else if (id === 'pen') {
-      content = [
-        colorPicker(this.settings.color, (c) => set('color', c)),
-        segmented(PEN_WIDTHS.map((w) => [w.value, w.label]), this.settings.penWidth, (v) => set('penWidth', v)),
-      ];
+      content = penOptions(this.settings, set);
+    } else if (id === 'dim') {
+      const fields = this.settings.dimFields;
+      const wrap = h('div', { class: 'dim-toggles' });
+      for (const f of DIM_FIELDS) {
+        wrap.appendChild(toggleButton(DIM_LABEL[f], fields.includes(f), () => {
+          set('dimFields', toggleDimField(this.settings.dimFields, f));
+          this.viewer.resetGesture();
+          this._renderSubbar();
+        }));
+      }
+      const shape = this.tools.dim.shape;
+      const hint = { line: '始点から終点へドラッグ', rect: '対角にドラッグ（矩形）', circle: '中心から外へドラッグ（円）', point: '位置をタップ' }[shape];
+      content = [wrap, colorPicker(this.settings.color, (c) => set('color', c)), h('span', { class: 'hint' }, hint)];
     } else if (id === 'eraser') {
-      content = [h('span', { class: 'hint' }, '手書きの線をなぞって消す（写真・メモは消えません）')];
+      content = [h('span', { class: 'hint' }, '手書きの線をなぞって消す（写真・メモ・寸法は消えません）')];
     }
     sb.replaceChildren(...content);
+  }
+
+  applyColorToSelection(color) {
+    const sel = this.tools.select;
+    const ids = new Set(sel.objIds);
+    const n = this.store.project.objects.filter((o) => ids.has(o.id) && ['memo', 'stroke', 'dim'].includes(o.type)).length;
+    if (!n) { toast('色を変えられるもの（メモ・手書き・寸法）が選択されていません'); return; }
+    this.store.mutate((p) => {
+      for (const o of p.objects) if (ids.has(o.id) && ['memo', 'stroke', 'dim'].includes(o.type)) o.color = color;
+    });
+  }
+
+  async deleteSelection() {
+    const sel = this.tools.select;
+    const items = [...sel.selectedObjects(), ...sel.selectedRooms()];
+    if (await deleteWithConfirm(this.store, this.target, items)) sel.clear();
+  }
+
+  // ---- 表示切替 ----
+
+  async layersDialog() {
+    const layers = this.settings.layers;
+    const rows = LAYERS.map((l) => {
+      const cb = h('input', { type: 'checkbox', checked: layers[l.id] !== false });
+      cb.addEventListener('change', () => {
+        layers[l.id] = cb.checked;
+        this._set('layers', layers);
+        this.viewer.layers = layers;
+        this.tools.select.clear();
+        this.viewer.requestRedraw();
+        this._updateLayersIcon();
+      });
+      return h('label', { class: 'switch-row' }, h('span', {}, l.label), cb);
+    });
+    await modal({
+      title: '表示切替',
+      className: 'modal-narrow',
+      body: h('div', { class: 'form' }, ...rows,
+        h('div', { class: 'muted small' }, '非表示のものはタップ・選択・消しゴムの対象になりません。')),
+      buttons: [
+        {
+          label: 'すべて表示',
+          onClick: () => {
+            for (const l of LAYERS) layers[l.id] = true;
+            for (const r of rows) r.querySelector('input').checked = true;
+            this._set('layers', layers);
+            this.viewer.layers = layers;
+            this.viewer.requestRedraw();
+            this._updateLayersIcon();
+          },
+        },
+        { label: '閉じる', kind: 'primary', value: null },
+      ],
+    });
+  }
+
+  _updateLayersIcon() {
+    const hidden = LAYERS.some((l) => this.settings.layers[l.id] === false);
+    this.el.layers.classList.toggle('badge', hidden);
+    this.el.layers.setAttribute('aria-label', hidden ? '表示切替（非表示あり）' : '表示切替');
   }
 
   // ---- メニュー ----
@@ -424,6 +526,7 @@ export class EditorScreen {
     const items = [
       ['addDrawing', '図面を追加'],
       ['drawings', '図面の切替・名前変更・削除'],
+      ['layers', '表示切替'],
       ['settings', 'プロジェクト設定'],
       ['export', '書き出し（.zip）'],
     ];
@@ -435,6 +538,7 @@ export class EditorScreen {
     });
     if (v === 'addDrawing') this.addDrawing();
     else if (v === 'drawings') this.drawingMenu();
+    else if (v === 'layers') this.layersDialog();
     else if (v === 'settings') this.projectSettings();
     else if (v === 'export') {
       await this.store.flush();
@@ -475,22 +579,12 @@ export class EditorScreen {
     } else if (mod && e.key.toLowerCase() === 'y') {
       e.preventDefault();
       this.store.redo();
-    } else if (e.key === 'Escape' && this.settings.tool === 'room') {
-      this.tools.room.clear();
+    } else if (e.key === 'Escape') {
+      if (this.settings.tool === 'room') this.tools.room.clear();
+      if (this.settings.tool === 'select') this.tools.select.clear();
+    } else if ((e.key === 'Delete' || e.key === 'Backspace') && this.settings.tool === 'select' && this.tools.select.count) {
+      e.preventDefault();
+      this.deleteSelection();
     }
   }
-}
-
-function segmented(options, value, onChange) {
-  const wrap = h('div', { class: 'seg' });
-  for (const [v, label] of options) {
-    const b = h('button', { class: 'seg-btn' + (v === value ? ' on' : ''), type: 'button' }, label);
-    b.addEventListener('click', () => {
-      for (const x of wrap.children) x.classList.remove('on');
-      b.classList.add('on');
-      onChange(v);
-    });
-    wrap.appendChild(b);
-  }
-  return wrap;
 }

@@ -1,17 +1,37 @@
 // 図面キャンバス：表示・パン／ズーム・オブジェクト描画・入力の振り分け
+// 写真ビューアー（写真への書き込み）でも同じクラスを使う
 
-import { polygonCentroid } from './model.js';
+import {
+  polygonCentroid, pointInPolygon, distToSegment, unitScale, objectPoints,
+  dimText, DIM_TEXT_PT, HL_ALPHA,
+} from './model.js';
 
 const TAP_SLOP = 8;          // これ以上動いたらタップではなくドラッグ
+const LONG_PRESS_MS = 500;
 const DETAIL_DELAY = 160;    // ズーム後に高解像度で描き直すまでの待ち(ms)
 const MAX_DETAIL_PIXELS = 12e6;
+const HIT = 10;              // タップ判定の余裕(画面px)
 
 export const ROOM_COLOR = '#00897b';
 export const PIN_COLOR = '#d32f2f';
+export const SELECT_COLOR = '#1e66f5';
+
+export const LAYERS = [
+  { id: 'photo', label: '写真ピン' },
+  { id: 'memo', label: 'メモ' },
+  { id: 'stroke', label: '手書き' },
+  { id: 'dim', label: '寸法' },
+  { id: 'room', label: '部屋範囲' },
+];
 
 export class Viewer {
-  constructor(container) {
+  /**
+   * options.memoStyle: 'bubble'（図面：1行に省略）| 'full'（写真：全文を写真に固定した大きさで）
+   */
+  constructor(container, { memoStyle = 'bubble', unitBase = 1190.55 } = {}) {
     this.container = container;
+    this.memoStyle = memoStyle;
+    this.unitBase = unitBase;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'viewer-canvas';
     container.appendChild(this.canvas);
@@ -24,33 +44,40 @@ export class Viewer {
     this.page = null;          // { width, height }
     this.source = null;        // drawing-source
     this.pageIndex = 0;
+    this.drawingId = null;
     this.base = null;
     this.detail = null;
     this.detailTask = null;
     this.detailTimer = null;
 
-    this.project = null;
-    this.drawingId = null;
-    this.hiddenIds = new Set();
-    this.tool = null;          // 現在のツール（tools.js）
+    // 表示するオブジェクト・部屋を返す関数（呼び出し側が設定）
+    this.objectSource = () => [];
+    this.roomSource = () => [];
+    this.layers = { photo: true, memo: true, stroke: true, dim: true, room: true };
+    this.hiddenIds = new Set();     // 消しゴムでなぞり中など、一時的に隠す
+    this.highlightIds = new Set();  // 強調表示（選択中・長押し中）
+    this.tool = null;
     this.penDetected = false;
 
     this.pointers = new Map();
     this.gesture = null;
     this._raf = 0;
-    this.onViewChange = null;  // 表示位置が変わったら呼ばれる
+    this.onViewChange = null;
 
     this._bindInput();
-    new ResizeObserver(() => this._resize()).observe(container);
+    this._ro = new ResizeObserver(() => this._resize());
+    this._ro.observe(container);
     this._resize();
   }
 
-  // ---- 表示データ ----
-
-  setProject(project) {
-    this.project = project;
-    this.requestRedraw();
+  destroy() {
+    this._ro.disconnect();
+    this._cancelDetail();
+    cancelAnimationFrame(this._raf);
+    this.canvas.remove();
   }
+
+  // ---- 表示データ ----
 
   async setPage(source, drawingId, pageIndex, savedView) {
     this._cancelDetail();
@@ -73,6 +100,11 @@ export class Viewer {
 
   clearPage() {
     this.setPage(null, null, 0);
+  }
+
+  /** 線の太さ・文字の大きさの基準（図面は A3 長辺 = 1190.55 を 1 とする） */
+  unit() {
+    return this.page ? (unitScale(this.page) * 1190.55) / this.unitBase : 1;
   }
 
   // ---- 座標変換 ----
@@ -101,9 +133,13 @@ export class Viewer {
     this._viewChanged();
   }
 
-  zoomAt(sx, sy, factor) {
+  _clampScale(s) {
     const fs = this.fitScale();
-    const ns = Math.min(fs * 60, Math.max(fs * 0.5, this.view.scale * factor));
+    return Math.min(fs * 60, Math.max(fs * 0.5, s));
+  }
+
+  zoomAt(sx, sy, factor) {
+    const ns = this._clampScale(this.view.scale * factor);
     const [x, y] = this.toDrawing(sx, sy);
     this.view.scale = ns;
     this.view.ox = sx - x * ns;
@@ -119,9 +155,10 @@ export class Viewer {
 
   _resize() {
     const r = this.container.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
     const oldW = this.cssW, oldH = this.cssH;
-    this.cssW = Math.max(1, r.width);
-    this.cssH = Math.max(1, r.height);
+    this.cssW = r.width;
+    this.cssH = r.height;
     this.dpr = window.devicePixelRatio || 1;
     this.canvas.width = Math.round(this.cssW * this.dpr);
     this.canvas.height = Math.round(this.cssH * this.dpr);
@@ -130,7 +167,6 @@ export class Viewer {
     if (this.page) {
       if (!oldW) this.fit();
       else {
-        // 中心を保つ
         this.view.ox += (this.cssW - oldW) / 2;
         this.view.oy += (this.cssH - oldH) / 2;
         this._viewChanged();
@@ -194,13 +230,12 @@ export class Viewer {
   draw() {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#e8eaed';
+    ctx.fillStyle = this.memoStyle === 'full' ? '#111' : '#e8eaed';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     if (!this.page) return;
     const { scale, ox, oy } = this.view;
 
-    // 図面
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.18)';
     ctx.shadowBlur = 8;
@@ -217,28 +252,65 @@ export class Viewer {
       ctx.drawImage(this.detail.canvas, ox + r.x * scale, oy + r.y * scale, r.w * scale, r.h * scale);
     }
 
-    if (this.project) this._drawObjects(ctx);
+    this._drawObjects(ctx);
+    if (this.highlightIds.size) this._drawHighlight(ctx);
     if (this.tool && this.tool.drawOverlay) this.tool.drawOverlay(ctx, this);
   }
 
+  layerVisible(type) {
+    return this.layers[type] !== false;
+  }
+
+  /** 表示中のオブジェクト（非表示レイヤー・一時非表示を除く） */
   pageObjects() {
-    if (!this.project) return [];
-    return this.project.objects.filter(
-      (o) => o.drawingId === this.drawingId && o.page === this.pageIndex && !this.hiddenIds.has(o.id)
-    );
+    return this.objectSource().filter((o) => this.layerVisible(o.type) && !this.hiddenIds.has(o.id));
   }
 
   pageRooms() {
-    if (!this.project) return [];
-    return this.project.rooms.filter((r) => r.drawingId === this.drawingId && r.page === this.pageIndex);
+    if (!this.layerVisible('room')) return [];
+    return this.roomSource().filter((r) => !this.hiddenIds.has(r.id));
   }
 
   _drawObjects(ctx) {
     const objs = this.pageObjects();
     for (const r of this.pageRooms()) this.drawRoom(ctx, r);
-    for (const o of objs) if (o.type === 'stroke') this.drawStroke(ctx, o);
+    // 蛍光ペンは普通の線より下に描く
+    for (const o of objs) if (o.type === 'stroke' && o.highlight) this.drawStroke(ctx, o);
+    for (const o of objs) if (o.type === 'stroke' && !o.highlight) this.drawStroke(ctx, o);
+    for (const o of objs) if (o.type === 'dim') this.drawDim(ctx, o);
     for (const o of objs) if (o.type === 'memo') this.drawMemo(ctx, o);
     for (const o of objs) if (o.type === 'photo') this.drawPhotoPin(ctx, o);
+  }
+
+  _drawHighlight(ctx) {
+    const items = [
+      ...this.objectSource().filter((o) => this.highlightIds.has(o.id)),
+      ...this.roomSource().filter((r) => this.highlightIds.has(r.id)),
+    ];
+    ctx.save();
+    ctx.strokeStyle = SELECT_COLOR;
+    ctx.fillStyle = 'rgba(30,102,245,.08)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
+    for (const o of items) {
+      const b = this.screenBounds(o);
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+    }
+    ctx.restore();
+  }
+
+  /** オブジェクトの画面上の外接矩形（余白込み） */
+  screenBounds(o) {
+    if (o.type === 'photo') { const b = this._pinBox(this.ctx, o); return pad(b, 5); }
+    if (o.type === 'memo') { const b = this._memoBox(this.ctx, o); return pad(b, 5); }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of objectPoints(o)) {
+      const [sx, sy] = this.toScreen(p[0], p[1]);
+      x0 = Math.min(x0, sx); y0 = Math.min(y0, sy); x1 = Math.max(x1, sx); y1 = Math.max(y1, sy);
+    }
+    const m = o.type === 'stroke' ? (o.width * this.view.scale) / 2 + 5 : 8;
+    return { x: x0 - m, y: y0 - m, w: x1 - x0 + m * 2, h: y1 - y0 + m * 2 };
   }
 
   drawRoom(ctx, room, { draft = false } = {}) {
@@ -284,6 +356,7 @@ export class Viewer {
     if (!pts.length) return;
     const { scale, ox, oy } = this.view;
     ctx.save();
+    if (s.highlight) ctx.globalAlpha = HL_ALPHA;
     ctx.strokeStyle = s.color;
     ctx.fillStyle = s.color;
     ctx.lineWidth = Math.max(0.75, s.width * scale);
@@ -292,6 +365,125 @@ export class Viewer {
     tracePath(ctx, pts, scale, ox, oy);
     ctx.restore();
   }
+
+  // ---- 寸法 ----
+
+  /** 寸法の画面上の形と文字の配置 */
+  _dimLayout(ctx, d) {
+    const u = this.unit();
+    const font = DIM_TEXT_PT * u * this.view.scale; // 図面に連動
+    const lw = Math.max(1, 0.6 * u * this.view.scale);
+    const gap = font * 0.35;
+    const f = (k) => (d.fields || []).includes(k);
+    const hText = f('H') ? dimText(d, 'H') : '';
+    const join = (...a) => a.filter(Boolean).join('×');
+    const L = { font, lw, labels: [] };
+    const [ax, ay] = this.toScreen(...d.p1);
+    const [bx, by] = this.toScreen(...(d.p2 || d.p1));
+    if (d.shape === 'line') {
+      let a = Math.atan2(by - ay, bx - ax);
+      let ta = a;
+      if (ta > Math.PI / 2) ta -= Math.PI; else if (ta <= -Math.PI / 2) ta += Math.PI;
+      const nx = Math.sin(ta), ny = -Math.cos(ta); // 文字の上側方向
+      L.geom = { kind: 'line', ax, ay, bx, by, a };
+      L.labels.push({ text: join(dimText(d, 'L'), hText), x: (ax + bx) / 2 + nx * gap, y: (ay + by) / 2 + ny * gap, angle: ta, align: 'center', base: 'bottom' });
+    } else if (d.shape === 'rect') {
+      const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), y0 = Math.min(ay, by), y1 = Math.max(ay, by);
+      L.geom = { kind: 'rect', x0, y0, x1, y1 };
+      if (f('W')) L.labels.push({ text: dimText(d, 'W'), x: (x0 + x1) / 2, y: y0 - gap, angle: 0, align: 'center', base: 'bottom' });
+      if (f('D')) L.labels.push({ text: dimText(d, 'D'), x: x1 + gap, y: (y0 + y1) / 2, angle: 0, align: 'left', base: 'middle' });
+      if (hText) L.labels.push({ text: hText, x: (x0 + x1) / 2, y: (y0 + y1) / 2, angle: 0, align: 'center', base: 'middle' });
+    } else if (d.shape === 'circle') {
+      const r = Math.hypot(bx - ax, by - ay);
+      L.geom = { kind: 'circle', cx: ax, cy: ay, r };
+      const k = Math.SQRT1_2;
+      L.labels.push({ text: join(dimText(d, 'phi'), hText), x: ax + r * k + gap * 0.5, y: ay - r * k - gap * 0.5, angle: 0, align: 'left', base: 'bottom' });
+    } else {
+      L.geom = { kind: 'point', cx: ax, cy: ay };
+      L.labels.push({ text: hText || 'H?', x: ax + Math.max(8, gap * 2), y: ay, angle: 0, align: 'left', base: 'middle' });
+    }
+    return L;
+  }
+
+  drawDim(ctx, d) {
+    const L = this._dimLayout(ctx, d);
+    const g = L.geom;
+    ctx.save();
+    ctx.strokeStyle = d.color;
+    ctx.fillStyle = d.color;
+    ctx.lineWidth = L.lw;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (g.kind === 'line') {
+      ctx.moveTo(g.ax, g.ay);
+      ctx.lineTo(g.bx, g.by);
+      // 両端の斜線
+      const t = Math.max(5, L.font * 0.7);
+      for (const [x, y] of [[g.ax, g.ay], [g.bx, g.by]]) {
+        const a = g.a + Math.PI / 4;
+        ctx.moveTo(x - Math.cos(a) * t / 2, y - Math.sin(a) * t / 2);
+        ctx.lineTo(x + Math.cos(a) * t / 2, y + Math.sin(a) * t / 2);
+      }
+    } else if (g.kind === 'rect') {
+      ctx.rect(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0);
+    } else if (g.kind === 'circle') {
+      ctx.arc(g.cx, g.cy, g.r, 0, Math.PI * 2);
+      const c = Math.max(3, L.font * 0.3);
+      ctx.moveTo(g.cx - c, g.cy); ctx.lineTo(g.cx + c, g.cy);
+      ctx.moveTo(g.cx, g.cy - c); ctx.lineTo(g.cx, g.cy + c);
+    } else {
+      const r = 5;
+      ctx.arc(g.cx, g.cy, r, 0, Math.PI * 2);
+      ctx.moveTo(g.cx - r, g.cy); ctx.lineTo(g.cx + r, g.cy);
+      ctx.moveTo(g.cx, g.cy - r); ctx.lineTo(g.cx, g.cy + r);
+    }
+    ctx.stroke();
+    if (L.font >= 2) {
+      ctx.font = `600 ${L.font}px system-ui, sans-serif`;
+      ctx.lineJoin = 'round';
+      for (const lb of L.labels) {
+        ctx.save();
+        ctx.translate(lb.x, lb.y);
+        ctx.rotate(lb.angle);
+        ctx.textAlign = lb.align;
+        ctx.textBaseline = lb.base === 'bottom' ? 'alphabetic' : 'middle';
+        ctx.lineWidth = Math.max(2, L.font * 0.25);
+        ctx.strokeStyle = 'rgba(255,255,255,.9)';
+        ctx.strokeText(lb.text, 0, 0);
+        ctx.fillText(lb.text, 0, 0);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  _dimHit(ctx, d, sx, sy) {
+    const L = this._dimLayout(ctx, d);
+    const g = L.geom;
+    let dist;
+    if (g.kind === 'line') dist = distToSegment(sx, sy, g.ax, g.ay, g.bx, g.by);
+    else if (g.kind === 'rect') {
+      dist = Math.min(
+        distToSegment(sx, sy, g.x0, g.y0, g.x1, g.y0), distToSegment(sx, sy, g.x1, g.y0, g.x1, g.y1),
+        distToSegment(sx, sy, g.x1, g.y1, g.x0, g.y1), distToSegment(sx, sy, g.x0, g.y1, g.x0, g.y0));
+    } else if (g.kind === 'circle') dist = Math.abs(Math.hypot(sx - g.cx, sy - g.cy) - g.r);
+    else dist = Math.hypot(sx - g.cx, sy - g.cy) - 4;
+    if (dist <= HIT) return true;
+    // 文字の上
+    ctx.font = `600 ${L.font}px system-ui, sans-serif`;
+    for (const lb of L.labels) {
+      const w = ctx.measureText(lb.text).width;
+      const c = Math.cos(-lb.angle), s = Math.sin(-lb.angle);
+      const dx = sx - lb.x, dy = sy - lb.y;
+      const lx = dx * c - dy * s, ly = dx * s + dy * c;
+      const x0 = lb.align === 'center' ? -w / 2 : 0;
+      const y0 = lb.base === 'bottom' ? -L.font : -L.font / 2;
+      if (lx >= x0 - 4 && lx <= x0 + w + 4 && ly >= y0 - 4 && ly <= y0 + L.font + 4) return true;
+    }
+    return false;
+  }
+
+  // ---- 写真ピン ----
 
   _pinLabel(o) {
     const n = String(o.number || '');
@@ -320,84 +512,142 @@ export class Viewer {
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#fff';
     ctx.stroke();
+    ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(this._pinLabel(o), b.sx, b.sy + 0.5);
+    // 書き込みありの印
+    if (o.annotations && o.annotations.length) {
+      ctx.beginPath();
+      ctx.arc(b.x + b.w - 1, b.y + 1, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffb300';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
+  // ---- メモ ----
+
   _memoBox(ctx, m) {
+    return this.memoStyle === 'full' ? this._memoBoxFull(ctx, m) : this._memoBoxBubble(ctx, m);
+  }
+
+  _memoBoxBubble(ctx, m) {
     const [sx, sy] = this.toScreen(m.x, m.y);
     const pad = 6;
     const maxW = 180;
     ctx.font = '13px system-ui, sans-serif';
     const text = m.text ? truncate(ctx, firstLine(m.text), maxW - pad * 2) : '';
-    const hasHw = m.handwriting && m.handwriting.strokes && m.handwriting.strokes.length;
+    const hasHw = !!(m.handwriting && m.handwriting.strokes && m.handwriting.strokes.length);
     const thumbW = 96, thumbH = 64;
     let w = 0, h = pad * 2;
     if (text) { w = Math.max(w, ctx.measureText(text).width); h += 16; }
     if (hasHw) { w = Math.max(w, thumbW); h += thumbH + (text ? 4 : 0); }
     if (!text && !hasHw) { w = 16; h += 16; }
     w += pad * 2;
-    return { sx, sy, x: sx + 4, y: sy - h - 10, w, h, pad, text, hasHw, thumbW, thumbH };
+    return { sx, sy, x: sx + 4, y: sy - h - 10, w, h, pad, lines: text ? [text] : [], lineH: 16, font: 13, hasHw, thumbW, thumbH, tail: true };
+  }
+
+  /** 写真用：全文表示。大きさは写真に対する比率（拡大すると一緒に大きくなる） */
+  _memoBoxFull(ctx, m) {
+    const [sx, sy] = this.toScreen(m.x, m.y);
+    const long = Math.max(this.page.width, this.page.height);
+    const k = this.view.scale;
+    const font = (long / 42) * k;
+    const pad = font * 0.4;
+    const maxW = (long * 0.42) * k;
+    ctx.font = `${font}px system-ui, sans-serif`;
+    const lines = m.text ? wrapText(ctx, m.text, maxW) : [];
+    const hasHw = !!(m.handwriting && m.handwriting.strokes && m.handwriting.strokes.length);
+    const thumbW = long * 0.22 * k, thumbH = thumbW * 2 / 3;
+    const lineH = font * 1.3;
+    let w = 0, h = pad * 2;
+    for (const l of lines) w = Math.max(w, ctx.measureText(l).width);
+    h += lines.length * lineH;
+    if (hasHw) { w = Math.max(w, thumbW); h += thumbH + (lines.length ? pad : 0); }
+    if (!lines.length && !hasHw) { w = font; h += lineH; }
+    w += pad * 2;
+    return { sx, sy, x: sx, y: sy, w, h, pad, lines, lineH, font, hasHw, thumbW, thumbH, tail: false };
   }
 
   drawMemo(ctx, m) {
     ctx.save();
     const b = this._memoBox(ctx, m);
-    // 吹き出し
-    ctx.beginPath();
-    ctx.moveTo(b.sx, b.sy);
-    ctx.lineTo(b.x + 6, b.y + b.h);
-    ctx.lineTo(b.x + 16, b.y + b.h);
-    ctx.closePath();
-    ctx.fillStyle = m.color;
-    ctx.fill();
-    ctx.shadowColor = 'rgba(0,0,0,.25)';
-    ctx.shadowBlur = 4;
-    roundRect(ctx, b.x, b.y, b.w, b.h, 6);
-    ctx.fillStyle = 'rgba(255,255,255,.95)';
+    if (b.tail) {
+      ctx.beginPath();
+      ctx.moveTo(b.sx, b.sy);
+      ctx.lineTo(b.x + 6, b.y + b.h);
+      ctx.lineTo(b.x + 16, b.y + b.h);
+      ctx.closePath();
+      ctx.fillStyle = m.color;
+      ctx.fill();
+      ctx.shadowColor = 'rgba(0,0,0,.25)';
+      ctx.shadowBlur = 4;
+    }
+    const r = Math.min(6, b.font * 0.4);
+    roundRect(ctx, b.x, b.y, b.w, b.h, r);
+    ctx.fillStyle = b.tail ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.85)';
     ctx.fill();
     ctx.shadowColor = 'transparent';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = b.tail ? 2 : Math.max(1, b.font * 0.12);
     ctx.strokeStyle = m.color;
     ctx.stroke();
     let y = b.y + b.pad;
     ctx.fillStyle = m.color;
     ctx.textBaseline = 'top';
-    if (b.text) {
-      ctx.fillText(b.text, b.x + b.pad, y + 1);
-      y += 16 + (b.hasHw ? 4 : 0);
+    ctx.font = `${b.font}px system-ui, sans-serif`;
+    if (b.lines.length) {
+      for (const l of b.lines) { ctx.fillText(l, b.x + b.pad, y + b.font * 0.08); y += b.lineH; }
+      if (b.hasHw) y += b.tail ? 4 : b.pad;
     } else if (!b.hasHw) {
       ctx.fillText('…', b.x + b.pad, y + 1);
     }
-    if (b.hasHw) {
-      drawHandwriting(ctx, m.handwriting, m.color, b.x + b.pad, y, b.thumbW, b.thumbH, { crop: true });
-    }
+    if (b.hasHw) drawHandwriting(ctx, m.handwriting, m.color, b.x + b.pad, y, b.thumbW, b.thumbH, { crop: true });
     ctx.restore();
   }
 
-  /** 画面座標で、タップ対象（写真ピン・メモ）を探す。手前に描くものを優先 */
-  hitTest(sx, sy, types = ['photo', 'memo']) {
+  // ---- 当たり判定 ----
+
+  /** 画面座標で、タップ対象を探す。手前に描くものを優先 */
+  hitTest(sx, sy, types = ['photo', 'memo', 'dim']) {
     const ctx = this.ctx;
     const objs = this.pageObjects();
+    const rev = (t) => objs.filter((o) => o.type === t).reverse();
     if (types.includes('photo')) {
-      for (let i = objs.length - 1; i >= 0; i--) {
-        const o = objs[i];
-        if (o.type !== 'photo') continue;
+      for (const o of rev('photo')) {
         const b = this._pinBox(ctx, o);
         if (sx >= b.x - 6 && sx <= b.x + b.w + 6 && sy >= b.y - 6 && sy <= b.y + b.h + 6) return o;
       }
     }
     if (types.includes('memo')) {
-      for (let i = objs.length - 1; i >= 0; i--) {
-        const o = objs[i];
-        if (o.type !== 'memo') continue;
+      for (const o of rev('memo')) {
         const b = this._memoBox(ctx, o);
-        if ((sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h + 10) ||
+        if ((sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h + (b.tail ? 10 : 0)) ||
             Math.hypot(sx - b.sx, sy - b.sy) < 10) return o;
       }
+    }
+    if (types.includes('dim')) {
+      for (const o of rev('dim')) if (this._dimHit(ctx, o, sx, sy)) return o;
+    }
+    if (types.includes('stroke')) {
+      const { scale, ox, oy } = this.view;
+      for (const o of rev('stroke')) {
+        const r = HIT + (o.width * scale) / 2;
+        const p = o.points;
+        for (let i = 0; i < p.length; i++) {
+          const a = p[Math.max(0, i - 1)], b = p[i];
+          if (distToSegment(sx, sy, a[0] * scale + ox, a[1] * scale + oy, b[0] * scale + ox, b[1] * scale + oy) <= r) return o;
+        }
+      }
+    }
+    if (types.includes('room')) {
+      const [x, y] = this.toDrawing(sx, sy);
+      const rooms = this.pageRooms();
+      for (let i = rooms.length - 1; i >= 0; i--) if (pointInPolygon(x, y, rooms[i].polygon)) return rooms[i];
     }
     return null;
   }
@@ -419,7 +669,6 @@ export class Viewer {
       this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)));
     }, { passive: false });
     c.addEventListener('contextmenu', (e) => e.preventDefault());
-    // iOS Safari のページ拡大を抑止
     for (const t of ['gesturestart', 'gesturechange', 'gestureend']) {
       c.addEventListener(t, (e) => e.preventDefault());
     }
@@ -435,13 +684,12 @@ export class Viewer {
   _onDown(e) {
     if (!this.page) return;
     e.preventDefault();
-    try { this.canvas.setPointerCapture(e.pointerId); } catch {}
+    try { this.canvas.setPointerCapture(e.pointerId); } catch { /* 合成イベント等 */ }
     if (e.pointerType === 'pen') this.penDetected = true;
     const ev = this._evt(e);
     this.pointers.set(e.pointerId, { sx: ev.sx, sy: ev.sy, type: e.pointerType });
 
     if (this.pointers.size === 2) {
-      // 2本指：ツール操作を取り消してピンチへ
       this._cancelGesture();
       const [a, b] = [...this.pointers.values()];
       this.gesture = {
@@ -466,9 +714,16 @@ export class Viewer {
       this.gesture = { kind: 'tool', id: e.pointerId };
       tool.down(ev);
     } else {
-      // タップ or 1本指パン
-      this.gesture = { kind: 'tap', id: e.pointerId, s0: [ev.sx, ev.sy], view0: { ...this.view }, moved: false, ev0: ev };
-      if (tool && tool.press) tool.press(ev);
+      const g = { kind: 'tap', id: e.pointerId, s0: [ev.sx, ev.sy], view0: { ...this.view }, moved: false, ev0: ev, long: false };
+      this.gesture = g;
+      if (tool && tool.longPress) {
+        g.timer = setTimeout(() => {
+          if (this.gesture !== g || g.moved) return;
+          g.long = true;
+          if (navigator.vibrate) navigator.vibrate(15);
+          tool.longPress(ev);
+        }, LONG_PRESS_MS);
+      }
     }
   }
 
@@ -484,8 +739,7 @@ export class Viewer {
       const [a, b] = [...this.pointers.values()];
       const d = Math.hypot(a.sx - b.sx, a.sy - b.sy);
       const m = [(a.sx + b.sx) / 2, (a.sy + b.sy) / 2];
-      const fs = this.fitScale();
-      const ns = Math.min(fs * 60, Math.max(fs * 0.5, g.view0.scale * (d / g.d0)));
+      const ns = this._clampScale(g.view0.scale * (d / g.d0));
       const x = (g.m0[0] - g.view0.ox) / g.view0.scale;
       const y = (g.m0[1] - g.view0.oy) / g.view0.scale;
       this.view = { scale: ns, ox: m[0] - x * ns, oy: m[1] - y * ns };
@@ -493,13 +747,13 @@ export class Viewer {
     } else if (g.id !== e.pointerId) {
       return;
     } else if (g.kind === 'tool') {
-      // 合体イベント（Apple Pencil 等の高頻度入力）を取りこぼさない
       const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
       if (list.length > 1) for (const ce of list) this.tool.move(this._evt(ce));
       else this.tool.move(ev);
     } else if (g.kind === 'pan' || g.kind === 'tap') {
+      if (g.long) return;
       const dx = ev.sx - g.s0[0], dy = ev.sy - g.s0[1];
-      if (!g.moved && Math.hypot(dx, dy) > TAP_SLOP) g.moved = true;
+      if (!g.moved && Math.hypot(dx, dy) > TAP_SLOP) { g.moved = true; clearTimeout(g.timer); }
       if (g.moved) {
         this.view = { scale: g.view0.scale, ox: g.view0.ox + dx, oy: g.view0.oy + dy };
         this._viewChanged();
@@ -518,21 +772,22 @@ export class Viewer {
     }
     if (g.id !== e.pointerId) return;
     this.gesture = null;
+    clearTimeout(g.timer);
     if (g.kind === 'tool') {
       if (cancelled) this.tool.cancel();
       else this.tool.up(this._evt(e));
-    } else if (g.kind === 'tap' && !g.moved && !cancelled && this.tool && this.tool.tap) {
+    } else if (g.kind === 'tap' && !g.moved && !g.long && !cancelled && this.tool && this.tool.tap) {
       this.tool.tap(g.ev0);
     }
   }
 
   _cancelGesture() {
     const g = this.gesture;
+    if (g) clearTimeout(g.timer);
     if (g && g.kind === 'tool' && this.tool) this.tool.cancel();
     this.gesture = null;
   }
 
-  /** ツール切替時などに呼ぶ */
   resetGesture() {
     this._cancelGesture();
     this.requestRedraw();
@@ -540,6 +795,10 @@ export class Viewer {
 }
 
 // ---- 描画ヘルパー ----
+
+function pad(b, m) {
+  return { x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 };
+}
 
 export function tracePath(ctx, pts, scale, ox, oy) {
   const X = (p) => p[0] * scale + ox;
@@ -568,7 +827,7 @@ export function tracePath(ctx, pts, scale, ox, oy) {
 
 /** 手書きデータ（パッド座標）を枠内に縮小して描く */
 export function drawHandwriting(ctx, hw, color, x, y, w, h, { crop = false } = {}) {
-  // crop=true: 書いた部分だけを拡大して表示（図面上のサムネイル用）
+  // crop=true: 書いた部分だけを拡大して表示（サムネイル用）
   let bx = 0, by = 0, bw = hw.width, bh = hw.height;
   if (crop) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -576,10 +835,10 @@ export function drawHandwriting(ctx, hw, color, x, y, w, h, { crop = false } = {
       x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py);
     }
     if (x0 <= x1) {
-      const pad = 8;
+      const p = 8;
       const minSide = Math.max(hw.width, hw.height) / 4; // 小さな点を過剰に拡大しない
-      bw = Math.max(x1 - x0 + pad * 2, minSide);
-      bh = Math.max(y1 - y0 + pad * 2, minSide * (h / w));
+      bw = Math.max(x1 - x0 + p * 2, minSide);
+      bh = Math.max(y1 - y0 + p * 2, minSide * (h / w));
       bx = (x0 + x1) / 2 - bw / 2;
       by = (y0 + y1) / 2 - bh / 2;
     }
@@ -622,7 +881,7 @@ export function drawArrow(ctx, sx, sy, angle, color, len = 44) {
 }
 
 export function roundRect(ctx, x, y, w, h, r) {
-  r = Math.min(r, w / 2, h / 2);
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
@@ -647,4 +906,18 @@ function truncate(ctx, text, maxW) {
     else hi = mid - 1;
   }
   return chars.slice(0, lo).join('') + '…';
+}
+
+/** 改行と幅で折り返す（日本語は1文字単位） */
+export function wrapText(ctx, text, maxW) {
+  const out = [];
+  for (const para of text.split(/\r?\n/)) {
+    let line = '';
+    for (const ch of para) {
+      if (line && ctx.measureText(line + ch).width > maxW) { out.push(line); line = ch; }
+      else line += ch;
+    }
+    out.push(line);
+  }
+  return out;
 }

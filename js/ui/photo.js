@@ -1,9 +1,17 @@
-// 撮影ダイアログと写真ビューアー
+// 撮影ダイアログと写真ビューアー（拡大・写真への書き込み）
 
 import { h, modal, pickFile, busy, confirmDialog, toast, formatDate } from './dialogs.js';
 import { resizePhoto } from '../image.js';
 import { uid, nextPhotoNumber } from '../model.js';
 import * as db from '../db.js';
+import { Viewer } from '../viewer.js';
+import { openSource } from '../drawing-source.js';
+import { ViewTool, PenTool, MemoTool, EraserTool } from '../tools.js';
+import { photoTarget } from '../targets.js';
+import { editMemo, openMemo, colorPicker } from './memo.js';
+import { penOptions } from './tool-options.js';
+import { deleteWithConfirm } from './delete.js';
+import { icon } from './icons.js';
 
 function roomNameInput(project, value) {
   const listId = 'room-names-' + Math.random().toString(36).slice(2);
@@ -13,12 +21,12 @@ function roomNameInput(project, value) {
   return { input, el: h('div', {}, input, list) };
 }
 
-async function storePhoto(app, file) {
+async function storePhoto(store, file) {
   const b = busy('写真を保存しています…');
   try {
     const { blob, width, height } = await resizePhoto(file);
     const id = uid();
-    await db.putBlob(app.store.project.id, id, blob, { kind: 'photo', mime: 'image/jpeg' });
+    await db.putBlob(store.project.id, id, blob, { kind: 'photo', mime: 'image/jpeg' });
     return { blobRef: id, width, height };
   } finally {
     b.close();
@@ -42,7 +50,7 @@ export function capturePhoto(app, target) {
     if (!file) return;
     let stored;
     try {
-      stored = await storePhoto(app, file);
+      stored = await storePhoto(store, file);
     } catch (e) {
       console.error(e);
       toast('写真を保存できませんでした: ' + e.message);
@@ -51,20 +59,13 @@ export function capturePhoto(app, target) {
     const now = new Date();
     const photo = store.mutate((p) => {
       const obj = {
-        id: uid(),
-        type: 'photo',
-        drawingId,
-        page,
-        x: target.x,
-        y: target.y,
-        angle: target.angle,
+        id: uid(), type: 'photo', drawingId, page,
+        x: target.x, y: target.y, angle: target.angle,
         roomId: target.room ? target.room.id : null,
         roomName,
         number: nextPhotoNumber(p, now),
         takenAt: now.getTime(),
-        blobRef: stored.blobRef,
-        width: stored.width,
-        height: stored.height,
+        blobRef: stored.blobRef, width: stored.width, height: stored.height,
         annotations: [],
       };
       p.objects.push(obj);
@@ -91,41 +92,116 @@ export function capturePhoto(app, target) {
   });
 }
 
-/** 写真ビューアー */
-export async function openPhotoViewer(app, photo) {
-  const { store } = app;
-  let url = null;
-  const img = h('img', { class: 'photo-img', alt: '' });
-  const setImage = async (ref) => {
-    const blob = await db.getBlob(store.project.id, ref);
-    if (url) URL.revokeObjectURL(url);
-    url = blob ? URL.createObjectURL(blob) : null;
-    img.src = url || '';
-    img.alt = blob ? `写真 ${photo.number}` : '画像が見つかりません';
-  };
-  await setImage(photo.blobRef);
+const PV_TOOLS = [
+  { id: 'view', label: '移動', icon: 'hand' },
+  { id: 'pen', label: 'ペン', icon: 'pen' },
+  { id: 'memo', label: 'メモ', icon: 'memo' },
+  { id: 'eraser', label: '消しゴム', icon: 'eraser' },
+];
 
-  const current = () => store.project.objects.find((o) => o.id === photo.id);
+/** 写真ビューアー（app: 編集画面の { store, settings, saveSetting }） */
+export async function openPhotoViewer(app, photo) {
+  const { store, settings } = app;
+  const photoId = photo.id;
+  const target = photoTarget(photoId);
+  const current = () => store.project.objects.find((o) => o.id === photoId);
+
+  // ---- 表示部 ----
+  const stage = h('div', { class: 'photo-stage' });
+  const pv = new Viewer(stage, { memoStyle: 'full', unitBase: 400 }); // 写真は画面いっぱいに表示するので太めに
+  pv.objectSource = () => target.list(store.project);
+  let source = null;
+  const loadImage = async (ref) => {
+    const blob = await db.getBlob(store.project.id, ref);
+    if (!blob) { toast('画像が見つかりません'); return; }
+    const s = await openSource(blob, 'image');
+    if (source) source.destroy();
+    source = s;
+    await pv.setPage(source, null, 0);
+  };
+
+  // ---- 書き込みツール ----
+  let annotating = false;
+  let toolId = 'view';
+  const ctx = {
+    store, settings, target, toast,
+    get viewer() { return pv; },
+    openPhoto() {},
+    openDim() {},
+    openMemo: (m) => openMemo(ctx, m),
+    createMemo: (x, y) => editMemo(ctx, null, { x, y }),
+    deleteWithConfirm: (items) => deleteWithConfirm(store, target, items),
+    onToolStateChange: () => {},
+  };
+  const tools = { view: new ViewTool(ctx), pen: new PenTool(ctx), memo: new MemoTool(ctx), eraser: new EraserTool(ctx) };
+  // 書き込みモード以外では、タップでメモを開く・長押しの削除だけ
+  pv.tool = tools.view;
+
+  const subbar = h('div', { class: 'subbar pv-subbar' });
+  const undoBtn = h('button', { class: 'icon-btn', 'aria-label': '元に戻す', onclick: () => store.undo() }, icon('undo'));
+  const redoBtn = h('button', { class: 'icon-btn', 'aria-label': 'やり直す', onclick: () => store.redo() }, icon('redo'));
+  const toolbar = h('div', { class: 'pv-toolbar' },
+    PV_TOOLS.map((t) => h('button', { class: 'tool-btn', 'data-tool': t.id, onclick: () => setTool(t.id) }, icon(t.icon), h('span', {}, t.label))),
+    undoBtn, redoBtn);
+  const annotateBar = h('div', { class: 'pv-annotate', hidden: true }, subbar, toolbar);
+
+  const save = (k, v) => app.saveSetting(k, v);
+  function renderSubbar() {
+    let content = [];
+    if (toolId === 'view') content = [h('span', { class: 'hint' }, 'ドラッグで移動・2本指で拡大／メモをタップで開く／長押しで削除')];
+    else if (toolId === 'pen') content = penOptions(settings, save);
+    else if (toolId === 'memo') content = [colorPicker(settings.color, (c) => save('color', c)), h('span', { class: 'hint' }, 'メモを置く位置をタップ')];
+    else if (toolId === 'eraser') content = [h('span', { class: 'hint' }, '手書きの線をなぞって消す')];
+    subbar.replaceChildren(...content);
+  }
+  function setTool(id) {
+    toolId = id;
+    pv.tool = tools[id];
+    pv.resetGesture();
+    for (const b of toolbar.querySelectorAll('.tool-btn')) b.classList.toggle('on', b.dataset.tool === id);
+    renderSubbar();
+  }
+  function updateUndo() {
+    undoBtn.disabled = !store.canUndo();
+    redoBtn.disabled = !store.canRedo();
+  }
+
+  // ---- 情報欄 ----
   const rn = roomNameInput(store.project, photo.roomName);
   const saveRoomName = () => {
     const v = rn.input.value.trim();
     const o = current();
     if (o && (o.roomName || '') !== v) {
-      store.mutate((p) => { p.objects.find((x) => x.id === photo.id).roomName = v; });
+      store.mutate((p) => { p.objects.find((x) => x.id === photoId).roomName = v; });
       toast('部屋名を変更しました');
     }
   };
   rn.input.addEventListener('change', saveRoomName);
-
   const taken = h('span', {}, formatDate(photo.takenAt));
-  const body = h('div', { class: 'photo-view' },
-    h('div', { class: 'photo-stage' }, img),
-    h('div', { class: 'photo-info form' },
-      h('div', { class: 'photo-meta' },
-        h('span', { class: 'photo-no' }, `No. ${photo.number}`),
-        taken),
-      h('label', { class: 'label' }, '部屋名'),
-      rn.el));
+  const annCount = h('span', { class: 'muted small' });
+  const info = h('div', { class: 'photo-info form' },
+    h('div', { class: 'photo-meta' }, h('span', { class: 'photo-no' }, `No. ${photo.number}`), taken, annCount),
+    h('div', { class: 'photo-room' }, h('label', { class: 'label' }, '部屋名'), rn.el));
+
+  const updateInfo = () => {
+    const o = current();
+    const n = o && o.annotations ? o.annotations.length : 0;
+    annCount.textContent = n ? `書き込み ${n}件` : '';
+  };
+
+  let closeModal = null;
+  const onChange = () => {
+    if (!current()) { if (closeModal) closeModal('gone'); return; }
+    pv.requestRedraw();
+    updateUndo();
+    updateInfo();
+  };
+  store.addEventListener('change', onChange);
+
+  const body = h('div', { class: 'photo-view' }, stage, annotateBar, info);
+  setTool('view');
+  updateUndo();
+  updateInfo();
 
   await modal({
     title: `写真 ${photo.number}`,
@@ -136,34 +212,53 @@ export async function openPhotoViewer(app, photo) {
         label: '削除', kind: 'danger',
         onClick: async (close) => {
           if (!(await confirmDialog(`写真 ${photo.number} を削除しますか？\n（「元に戻す」で取り消せます）`, { okLabel: '削除', danger: true }))) return;
-          store.mutate((p) => { p.objects = p.objects.filter((o) => o.id !== photo.id); });
+          store.mutate((p) => { p.objects = p.objects.filter((o) => o.id !== photoId); });
           close('deleted');
         },
       },
       {
         label: '撮り直し',
         onClick: async () => {
+          const o = current();
+          if (o && o.annotations && o.annotations.length &&
+              !(await confirmDialog('撮り直すと、この写真への書き込みは削除されます。よろしいですか？', { okLabel: '撮り直す', danger: true }))) return;
           const file = await pickFile({ accept: 'image/*', capture: 'environment' });
           if (!file) return;
           try {
-            const stored = await storePhoto(app, file);
+            const stored = await storePhoto(store, file);
             const t = Date.now();
             store.mutate((p) => {
-              const o = p.objects.find((x) => x.id === photo.id);
-              Object.assign(o, { blobRef: stored.blobRef, width: stored.width, height: stored.height, takenAt: t });
+              const x = p.objects.find((y) => y.id === photoId);
+              Object.assign(x, { blobRef: stored.blobRef, width: stored.width, height: stored.height, takenAt: t, annotations: [] });
             });
-            photo.blobRef = stored.blobRef;
             taken.textContent = formatDate(t);
-            await setImage(stored.blobRef);
+            await loadImage(stored.blobRef);
             toast('撮り直しました');
           } catch (e) {
             toast('写真を保存できませんでした: ' + e.message);
           }
         },
       },
+      {
+        label: '書き込み',
+        onClick: (close, btn) => {
+          annotating = !annotating;
+          annotateBar.hidden = !annotating;
+          info.classList.toggle('compact', annotating);
+          btn.textContent = annotating ? '書き込み終了' : '書き込み';
+          btn.classList.toggle('primary', annotating);
+          setTool(annotating ? 'pen' : 'view');
+        },
+      },
       { label: '閉じる', kind: 'primary', onClick: (close) => { saveRoomName(); close(); } },
     ],
+    onOpen: (box, close) => {
+      closeModal = close;
+      loadImage(photo.blobRef);
+    },
   });
   saveRoomName();
-  if (url) URL.revokeObjectURL(url);
+  store.removeEventListener('change', onChange);
+  pv.destroy();
+  if (source) source.destroy();
 }

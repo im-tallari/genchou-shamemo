@@ -154,3 +154,82 @@ export const PEN_WIDTHS = [
   { label: '太', value: 3.5 },
   { label: '極太', value: 7 },
 ];
+// 蛍光ペンの太さと不透明度
+export const HL_WIDTHS = [
+  { label: '細', value: 4 },
+  { label: '中', value: 8 },
+  { label: '太', value: 14 },
+  { label: '極太', value: 22 },
+];
+export const HL_ALPHA = 0.35;
+
+// ---- 寸法 ----
+// Dimension { id, type:'dim', drawingId, page, shape, p1, p2, fields, values, color }
+//   shape : 'line'（L）| 'rect'（W・D）| 'circle'（φ）| 'point'（H のみ）
+//   fields: 使う項目 ['L'|'W'|'D'|'H'|'phi', ...]
+//   values: { L?, W?, D?, H?, phi? }（mm、未入力は空文字）
+//   rect は p1,p2 が対角、circle は p1 が中心で p2 が円周上の点
+export const DIM_FIELDS = ['L', 'W', 'D', 'H', 'phi'];
+export const DIM_LABEL = { L: 'L', W: 'W', D: 'D', H: 'H', phi: 'φ' };
+// 寸法文字の高さ（A3図面上の pt。約2.5mm）
+export const DIM_TEXT_PT = 7.1;
+
+export function dimShape(fields) {
+  if (fields.includes('L')) return 'line';
+  if (fields.includes('W') || fields.includes('D')) return 'rect';
+  if (fields.includes('phi')) return 'circle';
+  return 'point';
+}
+
+/** 項目のオン／オフを切り替える。L・W/D・φ は排他、H はどれとも併用可 */
+export function toggleDimField(fields, f) {
+  const set = new Set(fields);
+  if (set.has(f)) {
+    set.delete(f);
+  } else {
+    set.add(f);
+    const group = { L: 'line', W: 'rect', D: 'rect', phi: 'circle' }[f];
+    if (group) {
+      for (const g of ['L', 'W', 'D', 'phi']) {
+        if (g !== f && ({ L: 'line', W: 'rect', D: 'rect', phi: 'circle' }[g]) !== group) set.delete(g);
+      }
+    }
+  }
+  if (!set.size) return fields; // 全部オフにはしない
+  return DIM_FIELDS.filter((x) => set.has(x));
+}
+
+/** 寸法の点（範囲選択・移動用） */
+export function dimPoints(d) {
+  const [x1, y1] = d.p1, [x2, y2] = d.p2 || d.p1;
+  if (d.shape === 'rect') return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+  if (d.shape === 'circle') {
+    const r = Math.hypot(x2 - x1, y2 - y1);
+    return [[x1 - r, y1], [x1 + r, y1], [x1, y1 - r], [x1, y1 + r]];
+  }
+  if (d.shape === 'point') return [[x1, y1]];
+  return [[x1, y1], [x2, y2]];
+}
+
+/** オブジェクトの代表点（範囲選択の判定用） */
+export function objectPoints(o) {
+  if (o.type === 'stroke') return o.points;
+  if (o.type === 'dim') return dimPoints(o);
+  if (o.polygon) return o.polygon;
+  return [[o.x, o.y]];
+}
+
+/** オブジェクトを平行移動（その場で書き換え） */
+export function translateObject(o, dx, dy) {
+  const mv = (p) => [Math.round((p[0] + dx) * 100) / 100, Math.round((p[1] + dy) * 100) / 100];
+  if (o.type === 'stroke') o.points = o.points.map(mv);
+  else if (o.type === 'dim') { o.p1 = mv(o.p1); if (o.p2) o.p2 = mv(o.p2); }
+  else if (o.polygon) o.polygon = o.polygon.map(mv);
+  else { [o.x, o.y] = mv([o.x, o.y]); }
+}
+
+/** 寸法の表示文字列 */
+export function dimText(d, f) {
+  const v = d.values && d.values[f];
+  return `${f === 'L' ? '' : DIM_LABEL[f]}${v === '' || v == null ? '?' : v}`;
+}

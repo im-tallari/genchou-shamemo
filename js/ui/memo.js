@@ -94,7 +94,7 @@ function handwritingPad(initial, getColor) {
 
 /** メモ編集。memo=null で新規 */
 export async function editMemo(app, memo, pos) {
-  const { store, viewer } = app;
+  const { store, target } = app;
   let color = memo ? memo.color : app.settings.color;
   const text = h('textarea', { class: 'input memo-text', rows: 3, placeholder: 'メモを入力' }, memo ? memo.text || '' : '');
   const pad = handwritingPad(memo && memo.handwriting, () => color);
@@ -141,7 +141,7 @@ export async function editMemo(app, memo, pos) {
   }
   if (memo) {
     store.mutate((p) => {
-      const o = p.objects.find((x) => x.id === memo.id);
+      const o = target.find(p, memo.id);
       if (!o) return;
       o.text = t;
       o.handwriting = hw;
@@ -149,18 +149,14 @@ export async function editMemo(app, memo, pos) {
     });
   } else {
     store.mutate((p) => {
-      p.objects.push({
-        id: uid(), type: 'memo',
-        drawingId: viewer.drawingId, page: viewer.pageIndex,
-        x: pos.x, y: pos.y, color, text: t, handwriting: hw,
-      });
+      target.add(p, { id: uid(), type: 'memo', x: pos.x, y: pos.y, color, text: t, handwriting: hw });
     });
   }
 }
 
 /** メモを開く（全文表示） */
 export async function openMemo(app, memo) {
-  const { store } = app;
+  const { store, target } = app;
   const parts = [];
   if (memo.text) parts.push(h('div', { class: 'memo-full', style: { color: memo.color } }, memo.text));
   let canvas = null;
@@ -194,6 +190,6 @@ export async function openMemo(app, memo) {
   if (v === 'edit') return editMemo(app, memo);
   if (v === 'delete') {
     if (!(await confirmDialog('このメモを削除しますか？\n（「元に戻す」で取り消せます）', { okLabel: '削除', danger: true }))) return;
-    store.mutate((p) => { p.objects = p.objects.filter((o) => o.id !== memo.id); });
+    store.mutate((p) => target.remove(p, [memo.id]));
   }
 }

@@ -3,7 +3,9 @@
 スマホ・タブレットで平面図を開き、写真・メモ・手書きを図面上に記録する現地調査用 Web ツール（PWA）。
 サーバーは使わず、データはすべて端末内（IndexedDB）に保存します。
 
-## 現在の実装範囲（第1段階）
+## 実装範囲
+
+### 第1段階
 
 - プロジェクト管理（作成・名前変更・削除）
 - 図面の表示（PDF・JPG・PNG、複数図面・複数ページ、ピンチ拡大／2本指パン／ホイール拡大）
@@ -19,6 +21,17 @@
 - .zip の書き出し／読み込み
 - PWA（オフライン動作、ホーム画面への追加の案内、`navigator.storage.persist()`）
 
+### 第2段階
+- 蛍光ペン：ペンの「蛍光」オンで半透明（不透明度35%）。太さは専用の4段階。普通の線より下に描画
+- 寸法：L・W・D・H・φ をそれぞれオン／オフ
+  - L → 線（始点→終点、水平・垂直に吸着）／W・D → 矩形（対角ドラッグ）／φ → 円（中心→外）／H のみ → 点（タップ）
+  - L・W/D・φ は排他、H はどれとも併用可。数値は mm、空欄可
+  - 文字は図面に固定した大きさ（A3上で約2.5mm）で、拡大・縮小に連動
+- 範囲選択：投げ縄で囲む（完全に入ったもの）／タップで1つ選択。枠内ドラッグで移動、色変更、削除
+- 長押し（表示ツール）：1つ選んで削除
+- 表示切替：写真ピン・メモ・手書き・寸法・部屋範囲（端末ごとに保存）。非表示のものはタップ・選択・消しゴムの対象外
+- 写真への書き込み：写真ビューアーで拡大・移動、「書き込み」でペン（蛍光含む）・メモ・消しゴム。元画像は残し、書き込みは別データ。書き込みのある写真はピンに印
+
 ## フォルダ構成
 
 ```
@@ -33,10 +46,11 @@ js/
   project-store.js      編集中プロジェクトの状態・自動保存・元に戻す
   drawing-source.js     図面の読み込みと描画（PDF.js / 画像）
   viewer.js             図面キャンバス（表示・ズーム・オブジェクト描画・入力）
-  tools.js              各ツール（表示・カメラ・部屋・メモ・ペン・消しゴム）
+  tools.js              各ツール（表示・選択・カメラ・部屋・メモ・ペン・寸法・消しゴム）
+  targets.js            書き込み先（図面 / 写真）の切替
   image.js              写真の縮小（長辺 2560px / JPEG 0.85）
   zip.js                .zip 書き出し／読み込み
-  ui/                   画面とダイアログ（home / editor / photo / memo / install / dialogs / icons）
+  ui/                   画面とダイアログ（home / editor / photo / memo / dim / delete / tool-options / install / dialogs / icons）
 icons/                  アプリアイコン
 vendor/                 外部ライブラリ（PDF.js 4.10.38 legacy build、JSZip 3.10.1）
 scripts/gen-precache.mjs  sw.js のキャッシュ対象リストを更新するスクリプト
@@ -71,6 +85,11 @@ node scripts/gen-precache.mjs
   - `drawings[].pages`：各ページの大きさ（図面座標。PDF はポイント、画像はピクセル）
   - `Memo.handwriting`：`{ width, height, strokes: [{ points, width }] }`（手書きパッドの座標）
   - `Photo.width / height`：保存した写真の画素数
+  - `Photo.annotations`：写真への書き込み（Stroke / Memo、座標は写真の画素）
+  - `Stroke.highlight`：蛍光ペンなら true
+  - `Dimension`：仕様書の `kind` の代わりに次の形で保持
+    `{ shape: 'line'|'rect'|'circle'|'point', p1, p2, fields: ['L'|'W'|'D'|'H'|'phi', ...], values: { L?, W?, D?, H?, phi? }, color }`
+    （rect は p1・p2 が対角、circle は p1 が中心で p2 が円周上の点）
 - 座標はすべて図面座標系（ページの左上が原点、ズームに依存しない）
 - zip：`project.json`、`drawings/<id>.<拡張子>`、`photos/<id>.jpg`
 

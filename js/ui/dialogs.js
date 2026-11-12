@@ -46,11 +46,11 @@ export function modal({ title, body, buttons = [], className = '', dismissable =
     }
     if (body) box.appendChild(h('div', { class: 'modal-body' }, body));
     if (buttons.length) {
-      box.appendChild(h('div', { class: 'modal-foot' }, buttons.map((b) =>
-        h('button', {
-          class: `btn ${b.kind || ''}`,
-          onclick: () => (b.onClick ? b.onClick(close) : close(b.value)),
-        }, b.label))));
+      box.appendChild(h('div', { class: 'modal-foot' }, buttons.map((b) => {
+        const el = h('button', { class: `btn ${b.kind || ''}` }, b.label);
+        el.addEventListener('click', () => (b.onClick ? b.onClick(close, el) : close(b.value)));
+        return el;
+      })));
     }
     backdrop.appendChild(box);
     backdrop.addEventListener('pointerdown', (e) => {

@@ -36,39 +36,65 @@ function handwritingPad(initial, getColor) {
   let cur = null;
   let scale = 1;
 
-  const redraw = () => {
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth || 300;
+  // キャンバスの大きさは表示時・大きさが変わったときだけ設定する（毎回作り直すと iPad で遅くなる）
+  let cssW = 0, dpr = 1;
+  const layout = () => {
+    const w = canvas.clientWidth;
+    const d = window.devicePixelRatio || 1;
+    if (!w || (w === cssW && d === dpr)) return false;
+    cssW = w;
+    dpr = d;
     scale = w / PAD_W;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(PAD_H * scale * dpr);
+    return true;
+  };
+  const style = () => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, PAD_H * scale);
-    const all = cur ? [...strokes, cur] : strokes;
     ctx.strokeStyle = ctx.fillStyle = getColor();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    for (const s of all) {
+  };
+  const redraw = () => {
+    layout();
+    if (!cssW) return;
+    style();
+    ctx.clearRect(0, 0, cssW, PAD_H * scale);
+    for (const s of cur ? [...strokes, cur] : strokes) {
       ctx.lineWidth = s.width * scale;
       tracePath(ctx, s.points, scale, 0, 0);
     }
+  };
+  new ResizeObserver(() => { if (layout()) redraw(); }).observe(canvas);
+
+  // 書いている間は、増えた部分だけを描き足す
+  const drawSegment = (from) => {
+    style();
+    ctx.lineWidth = cur.width * scale;
+    tracePath(ctx, cur.points.slice(Math.max(0, from - 2)), scale, 0, 0);
   };
 
   const pt = (e) => {
     const r = canvas.getBoundingClientRect();
     return [Math.round(((e.clientX - r.left) / scale) * 10) / 10, Math.round(((e.clientY - r.top) / scale) * 10) / 10];
   };
+  // iOS の文字選択・拡大鏡などの標準動作を止める（線が途切れたり、タイトルが選択されたりする原因）
+  for (const t of ['touchstart', 'touchmove', 'touchend']) {
+    canvas.addEventListener(t, (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+  }
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* 無視 */ }
+    layout();
     cur = { points: [pt(e)], width: PAD_LINE };
-    redraw();
+    drawSegment(0);
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!cur) return;
-    const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    const from = cur.points.length;
+    const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
     for (const ce of list.length ? list : [e]) cur.points.push(pt(ce));
-    redraw();
+    drawSegment(from);
   });
   const end = () => {
     if (!cur) return;

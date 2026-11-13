@@ -16,6 +16,12 @@ export const ROOM_COLOR = '#00897b';
 export const PIN_COLOR = '#d32f2f';
 export const SELECT_COLOR = '#1e66f5';
 
+/** 文字入力中か（iPad ではキーボードの変換候補の表示で画面の大きさが変わるため、その間は描き直さない） */
+export function isEditing() {
+  const a = document.activeElement;
+  return !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable);
+}
+
 export const LAYERS = [
   { id: 'photo', label: '写真ピン' },
   { id: 'memo', label: 'メモ' },
@@ -71,11 +77,18 @@ export class Viewer {
     this._bindInput();
     this._ro = new ResizeObserver(() => this._resize());
     this._ro.observe(container);
+    // 入力が終わったら、保留していた大きさの変更を反映する
+    this._onFocusOut = () => setTimeout(() => {
+      if (this._pendingResize && !isEditing()) this._resize();
+      if (this._pendingDetail && !isEditing()) { this._pendingDetail = false; this._scheduleDetail(); }
+    }, 350);
+    document.addEventListener('focusout', this._onFocusOut);
     this._resize();
   }
 
   destroy() {
     if (this._ro) this._ro.disconnect();
+    if (this._onFocusOut) document.removeEventListener('focusout', this._onFocusOut);
     this._cancelDetail();
     cancelAnimationFrame(this._raf);
     this.canvas.remove();
@@ -158,8 +171,13 @@ export class Viewer {
   }
 
   _resize() {
+    if (this.cssW && isEditing()) { this._pendingResize = true; return; }
+    this._pendingResize = false;
     const r = this.container.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
+    const dpr = window.devicePixelRatio || 1;
+    // 大きさが変わっていなければ何もしない（キャンバスの作り直しは重い）
+    if (Math.abs(r.width - this.cssW) < 0.5 && Math.abs(r.height - this.cssH) < 0.5 && dpr === this.dpr) return;
     const oldW = this.cssW, oldH = this.cssH;
     this.cssW = r.width;
     this.cssH = r.height;
@@ -194,6 +212,8 @@ export class Viewer {
 
   _renderDetail() {
     if (!this.base || !this.page) return;
+    // 文字入力中は重い描き直しをしない
+    if (isEditing()) { this._pendingDetail = true; return; }
     let s = this.view.scale * this.dpr;
     const baseScale = this.base.image.width / this.page.width;
     if (s <= baseScale * 1.15) { this.detail = null; this.requestRedraw(); return; }
@@ -695,6 +715,10 @@ export class Viewer {
       this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)));
     }, { passive: false });
     c.addEventListener('contextmenu', (e) => e.preventDefault());
+    // iOS の文字選択・拡大鏡などの標準動作を止める（線が途切れる原因になる）
+    for (const t of ['touchstart', 'touchmove']) {
+      c.addEventListener(t, (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+    }
     for (const t of ['gesturestart', 'gesturechange', 'gestureend']) {
       c.addEventListener(t, (e) => e.preventDefault());
     }

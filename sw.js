@@ -2,7 +2,7 @@
 // 下の PRECACHE と VERSION は scripts/gen-precache.mjs で自動生成する（手で編集しない）
 
 // <precache>
-const VERSION = 'fcb99bc92b2f';
+const VERSION = '16f9870bdc29';
 const PRECACHE = [
  "./",
  "./index.html",

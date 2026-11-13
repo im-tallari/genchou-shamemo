@@ -296,3 +296,8 @@ textarea.input { resize: vertical; min-height: 90px; line-height: 1.5; }
 .intro p { margin: 0; }
 .intro-list { margin: 0; padding-left: 20px; }
 .intro .btn { align-self: flex-start; margin-top: 4px; }
+
+/* ---- iPad：なぞったときに文字が選択されないように ---- */
+body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+input, textarea, select, .memo-full, .about p, .about li, .file-name { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+.hw-pad { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

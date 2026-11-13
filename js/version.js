@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 export const APP_NAME = '現調写メモ';
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.0.1';
 export const COPYRIGHT = 'Copyright (C) 2026 im-tallari';
 export const SOURCE_URL = 'https://github.com/im-tallari/genchou-shamemo';
 export const LICENSE_URL = 'https://github.com/im-tallari/genchou-shamemo/blob/main/LICENSE';

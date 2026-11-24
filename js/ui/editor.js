@@ -15,7 +15,7 @@ import { editDim } from './dim.js';
 import { deleteWithConfirm } from './delete.js';
 import { segmented, toggleButton, penOptions } from './tool-options.js';
 import { exportWithDialog } from './home.js';
-import { outputPdfDialog, outputLedgerDialog, outputMemoListDialog } from './output.js';
+import { outputPdfDialog, outputExcelDialog } from './output.js';
 import { requestPersist } from './install.js';
 import { showAbout } from './about.js';
 
@@ -540,8 +540,7 @@ export class EditorScreen {
       ['layers', '表示切替'],
       ['settings', 'プロジェクト設定'],
       ['outPdf', '図面PDFを出力'],
-      ['outLedger', '写真台帳（Excel）を出力'],
-      ['outMemo', 'メモ一覧（Excel）を出力'],
+      ['outExcel', '写真台帳・メモ一覧（Excel）を出力'],
       ['export', '書き出し（.zip）'],
       ['about', 'このアプリについて'],
     ];
@@ -560,12 +559,10 @@ export class EditorScreen {
       exportWithDialog(this.store.project.id);
     } else if (v === 'outPdf') {
       outputPdfDialog(this.store.project, this.settings.layers, { drawingId: this.drawingId, pageIndex: this.pageIndex });
-    } else if (v === 'outLedger') {
-      outputLedgerDialog(this.store.project);
+    } else if (v === 'outExcel') {
+      outputExcelDialog(this.store.project);
     } else if (v === 'about') {
       showAbout();
-    } else if (v === 'outMemo') {
-      outputMemoListDialog(this.store.project);
     }
   }
 

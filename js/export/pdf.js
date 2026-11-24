@@ -17,9 +17,10 @@ const IMAGE_MARGIN = 20;               // 画像図面の余白(pt)
  * pages: [{ drawing, pageIndex }]
  * layers: 表示切替の設定
  * memoStyle: 図面上のメモの表示（'tag' 番号のみ / 'bubble' 番号＋1行目 / 'bubbleFull' 番号＋全文）
- * embedComments: メモを PDF のコメント（付箋）として埋め込む
+ * embedComments: 図面のメモを PDF のコメント（付箋）として埋め込む
+ * embedPhotoComments: 写真のメモを写真ピンの横にコメントとして埋め込む
  */
-export async function exportDrawingsPdf(project, pages, layers, onProgress = () => {}, { memoStyle = 'tag', embedComments = false } = {}) {
+export async function exportDrawingsPdf(project, pages, layers, onProgress = () => {}, { memoStyle = 'tag', embedComments = false, embedPhotoComments = false } = {}) {
   const PDFLib = await loadPdfLib();
   const { PDFDocument, degrees } = PDFLib;
   const out = await PDFDocument.create();
@@ -96,6 +97,10 @@ export async function exportDrawingsPdf(project, pages, layers, onProgress = () 
       const memos = project.objects.filter((o) => o.type === 'memo' && o.drawingId === drawing.id && o.page === pageIndex);
       for (const m of memos) addMemoComment(PDFLib, out, page, m, { PH, ox, oy, kpt, uiPt: ui / pxPerPt });
     }
+    if (embedPhotoComments && layers.photo !== false) {
+      const photos = project.objects.filter((o) => o.type === 'photo' && o.memo && o.drawingId === drawing.id && o.page === pageIndex);
+      for (const ph of photos) addPhotoComment(PDFLib, out, page, ph, { PH, ox, oy, kpt, uiPt: ui / pxPerPt });
+    }
     n++;
     // UI を固まらせない
     await new Promise((r) => setTimeout(r, 0));
@@ -126,9 +131,50 @@ function pdfDate(d = new Date()) {
   return `D:${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+/** 付箋コメント（/Text 注釈）を1つ追加する。x0・y1 は左上（pt、PDF 座標） */
+function addTextAnnot(PDFLib, doc, page, { x0, y1, contents, subject, id, color }) {
+  const { PDFHexString, PDFString, PDFName } = PDFLib;
+  const x = Math.max(0, Math.min(x0, page.getWidth() - COMMENT_SIZE));
+  const y = Math.min(page.getHeight(), Math.max(COMMENT_SIZE, y1));
+  const annot = doc.context.obj({
+    Type: 'Annot',
+    Subtype: 'Text',
+    Rect: [x, y - COMMENT_SIZE, x + COMMENT_SIZE, y],
+    Contents: PDFHexString.fromText(contents),
+    T: PDFHexString.fromText(AUTHOR),
+    Subj: PDFHexString.fromText(subject),
+    NM: PDFString.of(`genchou-${id}`),
+    Name: PDFName.of('Comment'),
+    C: hexToRgb(color),
+    F: 24, // 拡大・回転しても大きさを変えない（印刷はしない）
+    Open: false,
+    M: PDFString.of(pdfDate()),
+    CreationDate: PDFString.of(pdfDate()),
+  });
+  page.node.addAnnot(doc.context.register(annot));
+}
+
+/** 写真のメモを、写真ピンの右に付箋として置く */
+function addPhotoComment(PDFLib, doc, page, ph, { PH, ox, oy, kpt, uiPt }) {
+  const n = String(ph.number || '');
+  const m = /^(\d{4})(\d{4})-(\d+)$/.exec(n);
+  const label = m ? `${m[2]}-${m[3]}` : n;      // viewer.js のピンの表示と同じ
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+  measureCtx.font = 'bold 12px system-ui, sans-serif';
+  const w = Math.max(24, measureCtx.measureText(label).width + 12); // ピンの幅（倍率1）
+  const ax = ox + ph.x * kpt, ayTop = oy + ph.y * kpt;
+  addTextAnnot(PDFLib, doc, page, {
+    x0: ax + (w / 2 + 3) * uiPt,
+    y1: PH - (ayTop - 11 * uiPt),
+    contents: `写真 ${n}\n${ph.memo}`,
+    subject: `写真 ${n}`,
+    id: ph.id,
+    color: '#d32f2f',
+  });
+}
+
 /** メモを付箋コメント（/Text 注釈）として、番号札のすぐ右に置く */
 function addMemoComment(PDFLib, doc, page, m, { PH, ox, oy, kpt, uiPt }) {
-  const { PDFHexString, PDFString, PDFName } = PDFLib;
   const hasHw = !!(m.handwriting && m.handwriting.strokes && m.handwriting.strokes.length);
   const lines = [m.number || 'メモ'];
   if (m.text) lines.push(m.text);
@@ -136,24 +182,12 @@ function addMemoComment(PDFLib, doc, page, m, { PH, ox, oy, kpt, uiPt }) {
   // 番号札の位置（viewer.js の吹き出しと同じ配置。単位は ui の画素 → pt）
   const ax = ox + m.x * kpt, ayTop = oy + m.y * kpt;
   const tagH = 16 + 12;
-  const left = ax + (4 + tagWidth(m.number || '') + 3) * uiPt;
-  const top = ayTop - (tagH + 10) * uiPt;
-  const x0 = Math.min(left, page.getWidth() - COMMENT_SIZE);
-  const y1 = Math.min(PH, Math.max(COMMENT_SIZE, PH - top));
-  const annot = doc.context.obj({
-    Type: 'Annot',
-    Subtype: 'Text',
-    Rect: [x0, y1 - COMMENT_SIZE, x0 + COMMENT_SIZE, y1],
-    Contents: PDFHexString.fromText(lines.join('\n')),
-    T: PDFHexString.fromText(AUTHOR),
-    Subj: PDFHexString.fromText(m.number || 'メモ'),
-    NM: PDFString.of(`genchou-${m.id}`),
-    Name: PDFName.of('Comment'),
-    C: hexToRgb(m.color),
-    F: 24, // 拡大・回転しても大きさを変えない（印刷はしない）
-    Open: false,
-    M: PDFString.of(pdfDate()),
-    CreationDate: PDFString.of(pdfDate()),
+  addTextAnnot(PDFLib, doc, page, {
+    x0: ax + (4 + tagWidth(m.number || '') + 3) * uiPt,
+    y1: PH - (ayTop - (tagH + 10) * uiPt),
+    contents: lines.join('\n'),
+    subject: m.number || 'メモ',
+    id: m.id,
+    color: m.color,
   });
-  page.node.addAnnot(doc.context.register(annot));
 }

@@ -4,7 +4,7 @@ import { h, modal, busy, toast, alertDialog } from './dialogs.js';
 import { downloadBlob } from '../zip.js';
 import { ymd } from '../model.js';
 import { exportDrawingsPdf } from '../export/pdf.js';
-import { exportPhotoLedger, exportMemoList } from '../export/excel.js';
+import { exportSurveyWorkbook } from '../export/excel.js';
 
 const PDF_OPTS_KEY = 'pdf-output-options';
 
@@ -61,7 +61,7 @@ async function run(title, task) {
   }
 }
 
-/** 図面PDF（＋メモ一覧） */
+/** 図面PDF（＋写真台帳・メモ一覧の Excel） */
 export async function outputPdfDialog(project, layers, current) {
   if (!project.drawings.length) { alertDialog('図面がありません'); return; }
   const checks = [];
@@ -82,31 +82,34 @@ export async function outputPdfDialog(project, layers, current) {
   try { saved = JSON.parse(localStorage.getItem(PDF_OPTS_KEY) || '{}'); } catch { /* 既定値 */ }
 
   const memoOn = layers.memo !== false;
+  const photoOn = layers.photo !== false;
   const memoStyles = [['tag', '番号のみ'], ['bubble', '番号＋1行目（画面と同じ）'], ['bubbleFull', '番号＋全文']];
   let memoStyle = memoStyles.some(([k]) => k === saved.memoStyle) ? saved.memoStyle : 'tag';
-  const commentCb = h('input', { type: 'checkbox', checked: saved.embedComments !== false, disabled: !memoOn });
-  const commentRow = h('div', { class: 'sub-options' },
-    h('label', { class: 'check-row' }, commentCb, h('span', {}, 'メモを PDF のコメントとして埋め込む')),
-    h('div', { class: 'muted small' }, '番号の横に付箋が付き、PDF アプリで本文を読めます（手書きは入りません）'));
-  const syncComment = () => { commentRow.hidden = memoStyle !== 'tag' || !memoOn; };
   const memoRadios = memoStyles.map(([k, label]) => {
     const r = h('input', { type: 'radio', name: 'pdf-memo-style', checked: k === memoStyle, disabled: !memoOn });
-    r.addEventListener('change', () => { if (r.checked) { memoStyle = k; syncComment(); } });
+    r.addEventListener('change', () => { if (r.checked) memoStyle = k; });
     return h('label', { class: 'check-row' }, r, h('span', {}, label));
   });
-  syncComment();
 
-  const memoCb = h('input', { type: 'checkbox', checked: memoOn && saved.withMemo !== false, disabled: !memoOn });
+  // コメント（付箋）：図面のメモは「番号のみ」のとき、写真のメモは常に
+  const commentCb = h('input', { type: 'checkbox', checked: saved.embedComments !== false, disabled: !memoOn && !photoOn });
+  const commentRow = h('div', {},
+    h('label', { class: 'check-row' }, commentCb, h('span', {}, 'メモを PDF のコメント（付箋）として埋め込む')),
+    h('div', { class: 'muted small sub-note' }, '図面のメモは「番号のみ」のときに番号の横へ、写真のメモは写真ピンの横へ付箋を付けます。PDF アプリで付箋を開くと本文を読めます（手書きは入りません）。'));
+
+  // Excel（写真台帳・メモ一覧を1つのファイルに）
   const photos = project.objects.filter((o) => o.type === 'photo');
-  const ledgerCb = h('input', { type: 'checkbox', checked: !!photos.length && !!saved.withLedger, disabled: !photos.length });
+  const memosAll = project.objects.filter((o) => o.type === 'memo');
+  const hasExcelData = (photoOn && photos.length) || (memoOn && memosAll.length);
+  const excelCb = h('input', { type: 'checkbox', checked: !!hasExcelData && saved.withExcel !== false, disabled: !hasExcelData });
   const annotated = photos.some((p) => p.annotations && p.annotations.length);
   const rComp = h('input', { type: 'radio', name: 'pdf-ledger-img', checked: saved.composite !== false });
   const rOrig = h('input', { type: 'radio', name: 'pdf-ledger-img', checked: saved.composite === false });
-  const ledgerImg = h('div', { class: 'sub-options', hidden: !annotated || !ledgerCb.checked },
-    h('div', { class: 'muted small' }, '書き込みのある写真に貼る画像'),
+  const ledgerImg = h('div', { class: 'sub-options', hidden: !annotated || !excelCb.checked },
+    h('div', { class: 'muted small' }, '写真台帳：書き込みのある写真に貼る画像'),
     h('label', { class: 'check-row' }, rComp, h('span', {}, '書き込みを合成した画像')),
     h('label', { class: 'check-row' }, rOrig, h('span', {}, '元画像')));
-  ledgerCb.addEventListener('change', () => { ledgerImg.hidden = !annotated || !ledgerCb.checked; });
+  excelCb.addEventListener('change', () => { ledgerImg.hidden = !annotated || !excelCb.checked; });
 
   const hidden = ['photo', 'memo', 'stroke', 'dim', 'room'].filter((k) => layers[k] === false);
   const names = { photo: '写真ピン', memo: 'メモ', stroke: '手書き', dim: '寸法', room: '部屋範囲' };
@@ -120,12 +123,13 @@ export async function outputPdfDialog(project, layers, current) {
         h('button', { class: 'link', type: 'button', onclick: () => checks.forEach((c) => { c.cb.checked = true; }) }, 'すべて選択'),
         h('button', { class: 'link', type: 'button', onclick: () => checks.forEach((c) => { c.cb.checked = false; }) }, 'すべて解除')),
       h('div', { class: 'label' }, '図面上のメモ'),
-      memoRadios[0], commentRow, memoRadios[1], memoRadios[2],
+      ...memoRadios,
+      h('div', { class: 'label' }, 'コメント'),
+      commentRow,
       h('div', { class: 'label' }, '一緒に出力するもの'),
-      h('label', { class: 'check-row' }, memoCb, h('span', {}, 'メモ一覧（Excel）')),
-      h('label', { class: 'check-row' }, ledgerCb, h('span', {}, '写真台帳（Excel）')),
+      h('label', { class: 'check-row' }, excelCb, h('span', {}, 'Excel（写真台帳・メモ一覧）')),
       ledgerImg,
-      h('div', { class: 'muted small' }, 'メモ一覧・写真台帳には、選んだページにあるメモ・写真だけが入ります。'),
+      h('div', { class: 'muted small' }, '写真台帳とメモ一覧は1つのファイルにシートを分けて入ります。選んだページにある写真・メモだけが入ります。'),
       hidden.length
         ? h('div', { class: 'warn small' }, `表示切替で非表示：${hidden.map((k) => names[k]).join('・')}（出力されません）`)
         : null),
@@ -142,79 +146,63 @@ export async function outputPdfDialog(project, layers, current) {
   });
   if (v !== 'ok') return;
   const pages = checks.filter((c) => c.cb.checked).map(({ drawing, pageIndex }) => ({ drawing, pageIndex }));
-  const withMemo = memoCb.checked && !memoCb.disabled;
-  const withLedger = ledgerCb.checked && !ledgerCb.disabled;
+  const withExcel = excelCb.checked && !excelCb.disabled;
   const composite = rComp.checked;
   try {
     localStorage.setItem(PDF_OPTS_KEY, JSON.stringify({
-      memoStyle, withMemo: memoOn ? memoCb.checked : saved.withMemo, withLedger, composite,
-      embedComments: memoOn ? commentCb.checked : saved.embedComments,
+      memoStyle, composite,
+      withExcel: excelCb.disabled ? saved.withExcel : excelCb.checked,
+      embedComments: commentCb.disabled ? saved.embedComments : commentCb.checked,
     }));
   } catch { /* 保存できなくても出力は続ける */ }
 
   const keys = new Set(pages.map((p) => `${p.drawing.id}:${p.pageIndex}`));
   const onPages = (o) => keys.has(`${o.drawingId}:${o.page}`);
-  // 進み具合の配分：PDF・メモ一覧・写真台帳
-  const wPdf = 1, wMemo = withMemo ? 0.15 : 0, wLedger = withLedger ? 0.6 : 0;
-  const total = wPdf + wMemo + wLedger;
+  const xPhotos = photoOn ? photos.filter(onPages) : [];
+  const xMemos = memoOn ? memosAll.filter(onPages) : [];
+  // 進み具合の配分：PDF と Excel
+  const wPdf = 1, wXls = withExcel ? 0.1 + xPhotos.length * 0.08 : 0;
+  const total = wPdf + wXls;
 
   const files = await run('出力中…', async (progress) => {
     const out = [];
     const pdf = await exportDrawingsPdf(project, pages, layers, (r, l) => progress((r * wPdf) / total, l), {
       memoStyle: memoOn ? memoStyle : 'tag',
       embedComments: memoOn && memoStyle === 'tag' && commentCb.checked,
+      embedPhotoComments: photoOn && commentCb.checked,
     });
     out.push({ blob: pdf, name: fileName(project, '図面', 'pdf') });
-    if (withMemo) {
-      const memos = project.objects.filter((o) => o.type === 'memo' && onPages(o));
-      if (memos.length) {
-        const xlsx = await exportMemoList(project, memos, (r) => progress((wPdf + r * wMemo) / total, 'メモ一覧'));
-        out.push({ blob: xlsx, name: fileName(project, 'メモ一覧', 'xlsx') });
-      }
-    }
-    if (withLedger) {
-      const list = photos.filter(onPages);
-      if (list.length) {
-        const xlsx = await exportPhotoLedger(project, { composite, photos: list },
-          (r, l) => progress((wPdf + wMemo + r * wLedger) / total, l));
-        out.push({ blob: xlsx, name: fileName(project, '写真台帳', 'xlsx') });
-      }
+    if (withExcel) {
+      const xlsx = await exportSurveyWorkbook(project, { photos: xPhotos, memos: xMemos, composite },
+        (r, l) => progress((wPdf + r * wXls) / total, l));
+      if (xlsx) out.push({ blob: xlsx, name: fileName(project, '写真台帳・メモ一覧', 'xlsx') });
     }
     return out;
   });
   if (files) await deliverFiles(files);
 }
 
-/** 写真台帳 */
-export async function outputLedgerDialog(project) {
+/** 写真台帳・メモ一覧（Excel） */
+export async function outputExcelDialog(project, layers = {}) {
   const photos = project.objects.filter((o) => o.type === 'photo');
-  if (!photos.length) { alertDialog('写真がありません'); return; }
-  const annotated = photos.filter((p) => p.annotations && p.annotations.length).length;
-  let composite = true;
-  if (annotated) {
-    const rComp = h('input', { type: 'radio', name: 'ledger-img', checked: true });
-    const rOrig = h('input', { type: 'radio', name: 'ledger-img' });
-    const v = await modal({
-      title: '写真台帳（Excel）を出力',
-      className: 'modal-narrow',
-      body: h('div', { class: 'form' },
-        h('div', {}, `写真 ${photos.length}枚（うち書き込みあり ${annotated}枚）`),
-        h('div', { class: 'label' }, '書き込みのある写真に貼る画像'),
-        h('label', { class: 'check-row' }, rComp, h('span', {}, '書き込みを合成した画像')),
-        h('label', { class: 'check-row' }, rOrig, h('span', {}, '元画像'))),
-      buttons: [{ label: 'キャンセル', value: null }, { label: '出力', kind: 'primary', value: 'ok' }],
-    });
-    if (v !== 'ok') return;
-    composite = rComp.checked;
-  }
-  const blob = await run('写真台帳を作成中…', (progress) => exportPhotoLedger(project, { composite }, progress));
-  if (blob) await deliverFiles([{ blob, name: fileName(project, '写真台帳', 'xlsx') }]);
-}
-
-/** メモ一覧だけ */
-export async function outputMemoListDialog(project) {
   const memos = project.objects.filter((o) => o.type === 'memo');
-  if (!memos.length) { alertDialog('メモがありません'); return; }
-  const blob = await run('メモ一覧を作成中…', (progress) => exportMemoList(project, memos, progress));
-  if (blob) await deliverFiles([{ blob, name: fileName(project, 'メモ一覧', 'xlsx') }]);
+  if (!photos.length && !memos.length) { alertDialog('写真もメモもありません'); return; }
+  const annotated = photos.filter((p) => p.annotations && p.annotations.length).length;
+  const rComp = h('input', { type: 'radio', name: 'ledger-img', checked: true });
+  const rOrig = h('input', { type: 'radio', name: 'ledger-img' });
+  const v = await modal({
+    title: '写真台帳・メモ一覧（Excel）',
+    className: 'modal-narrow',
+    body: h('div', { class: 'form' },
+      h('div', {}, `写真 ${photos.length}枚・メモ ${memos.length}件`),
+      h('div', { class: 'muted small' }, '1つのファイルに「写真台帳」「メモ一覧」のシートを分けて出力します。'),
+      annotated ? h('div', { class: 'label' }, `書き込みのある写真（${annotated}枚）に貼る画像`) : null,
+      annotated ? h('label', { class: 'check-row' }, rComp, h('span', {}, '書き込みを合成した画像')) : null,
+      annotated ? h('label', { class: 'check-row' }, rOrig, h('span', {}, '元画像')) : null),
+    buttons: [{ label: 'キャンセル', value: null }, { label: '出力', kind: 'primary', value: 'ok' }],
+  });
+  if (v !== 'ok') return;
+  const blob = await run('Excel を作成中…', (progress) =>
+    exportSurveyWorkbook(project, { photos, memos, composite: rComp.checked }, progress));
+  if (blob) await deliverFiles([{ blob, name: fileName(project, '写真台帳・メモ一覧', 'xlsx') }]);
 }

@@ -567,7 +567,17 @@ export class Viewer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(this._pinLabel(o), b.sx, b.sy + 0.5);
-    // 書き込みありの印
+    // 写真のメモありの印（左上・青）
+    if (o.memo) {
+      ctx.beginPath();
+      ctx.arc(b.x + 1, b.y + 1, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#1e88e5';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+    }
+    // 書き込みありの印（右上・黄）
     if (o.annotations && o.annotations.length) {
       ctx.beginPath();
       ctx.arc(b.x + b.w - 1, b.y + 1, 5, 0, Math.PI * 2);

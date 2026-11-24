@@ -82,56 +82,53 @@ export function sortByNumber(list) {
   return [...list].sort((a, b) => String(a.number).localeCompare(String(b.number), 'ja', { numeric: true }));
 }
 
-/**
- * 写真台帳
- * composite=true なら、書き込みのある写真は書き込みを合成した画像を貼る
- * photos: 出力する写真（省略時はすべて）
- */
-export async function exportPhotoLedger(project, { composite = true, photos: only = null } = {}, onProgress = () => {}) {
-  const ExcelJS = await loadExcelJS();
-  const wb = newWorkbook(ExcelJS, project);
+/** 写真台帳のシート（photos が空ならシートを作らない） */
+async function addPhotoSheet(wb, project, photos, { composite }, onProgress) {
+  if (!photos.length) return;
   const ws = wb.addWorksheet('写真台帳');
   const cols = [
     { header: '番号', width: 13 },
-    { header: '部屋名', width: 16 },
+    { header: '部屋名', width: 14 },
+    { header: 'メモ', width: 22 },
     { header: '書き込み', width: 8 },
     { header: '写真', width: 44 },
     { header: '撮影日時', width: 16 },
-    { header: '図面名', width: 18 },
+    { header: '図面名', width: 16 },
   ];
+  const PHOTO_COL = 4; // 0 始まり
   ws.columns = cols.map((c) => ({ header: c.header, width: c.width }));
   styleHeader(ws.getRow(1));
   setupPrint(ws);
 
   const ROW_PT = 175;
   const drawingName = new Map(project.drawings.map((d) => [d.id, d.name]));
-  const photos = sortByNumber(only || project.objects.filter((o) => o.type === 'photo'));
+  const list = sortByNumber(photos);
   let i = 0;
-  for (const p of photos) {
-    onProgress(i / photos.length, `写真 ${p.number}`);
+  for (const p of list) {
+    onProgress(i / list.length, `写真 ${p.number}`);
     const hasAnn = !!(p.annotations && p.annotations.length);
     const row = ws.addRow([
       p.number,
       p.roomName || '',
+      p.memo || '',
       hasAnn ? '有' : '無',
       '',
       formatDate(p.takenAt),
       drawingName.get(p.drawingId) || '',
     ]);
     row.height = ROW_PT;
-    styleBody(row, [2, 6]);
+    styleBody(row, [2, 3, 7]);
+    row.getCell(3).alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
     const img = await renderPhoto(project, p, { longSide: 1200, annotate: composite && hasAnn });
     if (img) {
       const dataUrl = await blobToDataURL(img.blob);
-      placeImage(wb, ws, dataUrl, img, 3, row.number - 1, colPx(cols[3].width), rowPx(ROW_PT));
+      placeImage(wb, ws, dataUrl, img, PHOTO_COL, row.number - 1, colPx(cols[PHOTO_COL].width), rowPx(ROW_PT));
     } else {
-      row.getCell(4).value = '（画像なし）';
+      row.getCell(PHOTO_COL + 1).value = '（画像なし）';
     }
     i++;
     await new Promise((r) => setTimeout(r, 0));
   }
-  onProgress(1, '保存しています');
-  return toBlob(wb);
 }
 
 /** メモの位置にある部屋の名前 */
@@ -143,13 +140,9 @@ function roomNameAt(project, m) {
   return '';
 }
 
-/**
- * メモ一覧
- * memos: 出力するメモ（省略時はすべて）
- */
-export async function exportMemoList(project, memos = null, onProgress = () => {}) {
-  const ExcelJS = await loadExcelJS();
-  const wb = newWorkbook(ExcelJS, project);
+/** メモ一覧のシート（図面のメモのみ。memos が空ならシートを作らない） */
+async function addMemoSheet(wb, project, memos, onProgress) {
+  if (!memos.length) return;
   const ws = wb.addWorksheet('メモ一覧');
   const cols = [
     { header: '番号', width: 8 },
@@ -164,7 +157,7 @@ export async function exportMemoList(project, memos = null, onProgress = () => {
   setupPrint(ws);
 
   const drawingName = new Map(project.drawings.map((d) => [d.id, d.name]));
-  const list = sortByNumber(memos || project.objects.filter((o) => o.type === 'memo'));
+  const list = sortByNumber(memos);
   let i = 0;
   for (const m of list) {
     onProgress(i / list.length, `メモ ${m.number}`);
@@ -189,6 +182,24 @@ export async function exportMemoList(project, memos = null, onProgress = () => {
     }
     i++;
   }
+}
+
+/**
+ * 写真台帳とメモ一覧を1つの Excel ファイルにする（シートを分ける）
+ * photos / memos: 出力するもの（省略時はプロジェクトのすべて）
+ * composite=true なら、書き込みのある写真は書き込みを合成した画像を貼る
+ * 戻り値: Blob（写真もメモもなければ null）
+ */
+export async function exportSurveyWorkbook(project, { photos = null, memos = null, composite = true } = {}, onProgress = () => {}) {
+  const ph = photos || project.objects.filter((o) => o.type === 'photo');
+  const me = memos || project.objects.filter((o) => o.type === 'memo');
+  if (!ph.length && !me.length) return null;
+  const ExcelJS = await loadExcelJS();
+  const wb = newWorkbook(ExcelJS, project);
+  // 進み具合：写真は1枚ずつ画像を作るので重め
+  const wPh = ph.length * 5, wMe = me.length, total = wPh + wMe || 1;
+  await addPhotoSheet(wb, project, ph, { composite }, (r, l) => onProgress((r * wPh) / total, l));
+  await addMemoSheet(wb, project, me, (r, l) => onProgress((wPh + r * wMe) / total, l));
   onProgress(1, '保存しています');
   return toBlob(wb);
 }

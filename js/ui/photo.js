@@ -41,10 +41,12 @@ export function capturePhoto(app, target) {
   const { store, viewer } = app;
   const drawingId = viewer.drawingId, page = viewer.pageIndex;
   const rn = roomNameInput(store.project, target.room ? target.room.name : '');
+  const memoInput = h('textarea', { class: 'input photo-memo', rows: 2, placeholder: '（空欄可）' });
   const take = async (close, capture) => {
     // input.click() はタップ操作の中で同期的に呼ぶ必要がある
     const filePromise = pickFile({ accept: 'image/*', capture });
     const roomName = rn.input.value.trim();
+    const memo = memoInput.value.replace(/\s+$/, '');
     close(true);
     const file = await filePromise;
     if (!file) return;
@@ -63,6 +65,7 @@ export function capturePhoto(app, target) {
         x: target.x, y: target.y, angle: target.angle,
         roomId: target.room ? target.room.id : null,
         roomName,
+        memo,
         number: nextPhotoNumber(p, now),
         takenAt: now.getTime(),
         blobRef: stored.blobRef, width: stored.width, height: stored.height,
@@ -84,7 +87,9 @@ export function capturePhoto(app, target) {
     body: h('div', { class: 'form' },
       h('div', { class: 'muted small' }, modeLabel),
       h('label', { class: 'label' }, '部屋名'),
-      rn.el),
+      rn.el,
+      h('label', { class: 'label' }, '写真のメモ'),
+      memoInput),
     buttons: [
       { label: 'ファイルから選ぶ', onClick: (close) => take(close, null) },
       { label: '📷 カメラで撮影', kind: 'primary', onClick: (close) => take(close, 'environment') },
@@ -177,11 +182,24 @@ export async function openPhotoViewer(app, photo) {
     }
   };
   rn.input.addEventListener('change', saveRoomName);
+  // 写真のメモ（1枚に1つ。番号は付けない）
+  const memoInput = h('textarea', { class: 'input photo-memo', rows: 2, placeholder: '（空欄可）' }, photo.memo || '');
+  const saveMemo = () => {
+    const v = memoInput.value.replace(/\s+$/, '');
+    const o = current();
+    if (o && (o.memo || '') !== v) {
+      store.mutate((p) => { p.objects.find((x) => x.id === photoId).memo = v; });
+      toast('写真のメモを保存しました');
+    }
+  };
+  memoInput.addEventListener('change', saveMemo);
   const taken = h('span', {}, formatDate(photo.takenAt));
   const annCount = h('span', { class: 'muted small' });
   const info = h('div', { class: 'photo-info form' },
     h('div', { class: 'photo-meta' }, h('span', { class: 'photo-no' }, `No. ${photo.number}`), taken, annCount),
-    h('div', { class: 'photo-room' }, h('label', { class: 'label' }, '部屋名'), rn.el));
+    h('div', { class: 'photo-room' },
+      h('label', { class: 'label' }, '部屋名'), rn.el,
+      h('label', { class: 'label' }, '写真のメモ'), memoInput));
 
   const updateInfo = () => {
     const o = current();
@@ -250,7 +268,7 @@ export async function openPhotoViewer(app, photo) {
           setTool(annotating ? 'pen' : 'view');
         },
       },
-      { label: '閉じる', kind: 'primary', onClick: (close) => { saveRoomName(); close(); } },
+      { label: '閉じる', kind: 'primary', onClick: (close) => { saveRoomName(); saveMemo(); close(); } },
     ],
     onOpen: (box, close) => {
       closeModal = close;
@@ -258,6 +276,7 @@ export async function openPhotoViewer(app, photo) {
     },
   });
   saveRoomName();
+  saveMemo();
   store.removeEventListener('change', onChange);
   pv.destroy();
   if (source) source.destroy();

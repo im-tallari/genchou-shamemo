@@ -303,3 +303,6 @@ input, textarea, select, .memo-full, .about p, .about li, .file-name { -webkit-u
 .hw-pad { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .sub-options { margin: -4px 0 4px 30px; }
 .sub-options .check-row { padding: 4px 0; }
+.photo-memo { min-height: 56px; }
+.photo-room { display: flex; flex-direction: column; gap: 6px; }
+.sub-note { margin: -4px 0 0 30px; }

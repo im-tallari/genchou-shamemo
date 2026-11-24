@@ -85,8 +85,9 @@ export function sortByNumber(list) {
 /**
  * 写真台帳
  * composite=true なら、書き込みのある写真は書き込みを合成した画像を貼る
+ * photos: 出力する写真（省略時はすべて）
  */
-export async function exportPhotoLedger(project, { composite = true } = {}, onProgress = () => {}) {
+export async function exportPhotoLedger(project, { composite = true, photos: only = null } = {}, onProgress = () => {}) {
   const ExcelJS = await loadExcelJS();
   const wb = newWorkbook(ExcelJS, project);
   const ws = wb.addWorksheet('写真台帳');
@@ -104,7 +105,7 @@ export async function exportPhotoLedger(project, { composite = true } = {}, onPr
 
   const ROW_PT = 175;
   const drawingName = new Map(project.drawings.map((d) => [d.id, d.name]));
-  const photos = sortByNumber(project.objects.filter((o) => o.type === 'photo'));
+  const photos = sortByNumber(only || project.objects.filter((o) => o.type === 'photo'));
   let i = 0;
   for (const p of photos) {
     onProgress(i / photos.length, `写真 ${p.number}`);

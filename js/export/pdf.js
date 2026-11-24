@@ -15,8 +15,9 @@ const IMAGE_MARGIN = 20;               // 画像図面の余白(pt)
 /**
  * pages: [{ drawing, pageIndex }]
  * layers: 表示切替の設定
+ * memoStyle: 図面上のメモの表示（'tag' 番号のみ / 'bubble' 番号＋1行目 / 'bubbleFull' 番号＋全文）
  */
-export async function exportDrawingsPdf(project, pages, layers, onProgress = () => {}) {
+export async function exportDrawingsPdf(project, pages, layers, onProgress = () => {}, { memoStyle = 'tag' } = {}) {
   const { PDFDocument, degrees } = await loadPdfLib();
   const out = await PDFDocument.create();
   out.setTitle(project.name);
@@ -78,7 +79,7 @@ export async function exportDrawingsPdf(project, pages, layers, onProgress = () 
     const pxPerUnit = pxPerPt * kpt;
     const pinPt = (PIN_MM_ON_A3 / 25.4) * 72 * (Math.max(PW, PH) / A3[0]);
     const ui = (pinPt * pxPerPt) / PIN_PX;
-    const ov = await renderOverlay(project, drawing, pageIndex, { pxPerUnit, ui, layers });
+    const ov = await renderOverlay(project, drawing, pageIndex, { pxPerUnit, ui, layers, memoStyle });
     if (ov) {
       const png = await out.embedPng(new Uint8Array(await ov.blob.arrayBuffer()));
       const w = ov.w / pxPerPt, h = ov.h / pxPerPt;

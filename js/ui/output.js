@@ -6,6 +6,8 @@ import { ymd } from '../model.js';
 import { exportDrawingsPdf } from '../export/pdf.js';
 import { exportPhotoLedger, exportMemoList } from '../export/excel.js';
 
+const PDF_OPTS_KEY = 'pdf-output-options';
+
 function safeName(s) {
   return (s || 'project').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60);
 }
@@ -75,8 +77,31 @@ export async function outputPdfDialog(project, layers, current) {
       ? h('div', { class: 'check-group' }, h('div', { class: 'check-group-title' }, d.name), ...items)
       : items[0];
   });
+  // 前回の選択を覚えておく
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(PDF_OPTS_KEY) || '{}'); } catch { /* 既定値 */ }
+
   const memoOn = layers.memo !== false;
-  const memoCb = h('input', { type: 'checkbox', checked: memoOn, disabled: !memoOn });
+  const memoStyles = [['tag', '番号のみ'], ['bubble', '番号＋1行目（画面と同じ）'], ['bubbleFull', '番号＋全文']];
+  let memoStyle = memoStyles.some(([k]) => k === saved.memoStyle) ? saved.memoStyle : 'tag';
+  const memoRadios = memoStyles.map(([k, label]) => {
+    const r = h('input', { type: 'radio', name: 'pdf-memo-style', checked: k === memoStyle, disabled: !memoOn });
+    r.addEventListener('change', () => { if (r.checked) memoStyle = k; });
+    return h('label', { class: 'check-row' }, r, h('span', {}, label));
+  });
+
+  const memoCb = h('input', { type: 'checkbox', checked: memoOn && saved.withMemo !== false, disabled: !memoOn });
+  const photos = project.objects.filter((o) => o.type === 'photo');
+  const ledgerCb = h('input', { type: 'checkbox', checked: !!photos.length && !!saved.withLedger, disabled: !photos.length });
+  const annotated = photos.some((p) => p.annotations && p.annotations.length);
+  const rComp = h('input', { type: 'radio', name: 'pdf-ledger-img', checked: saved.composite !== false });
+  const rOrig = h('input', { type: 'radio', name: 'pdf-ledger-img', checked: saved.composite === false });
+  const ledgerImg = h('div', { class: 'sub-options', hidden: !annotated || !ledgerCb.checked },
+    h('div', { class: 'muted small' }, '書き込みのある写真に貼る画像'),
+    h('label', { class: 'check-row' }, rComp, h('span', {}, '書き込みを合成した画像')),
+    h('label', { class: 'check-row' }, rOrig, h('span', {}, '元画像')));
+  ledgerCb.addEventListener('change', () => { ledgerImg.hidden = !annotated || !ledgerCb.checked; });
+
   const hidden = ['photo', 'memo', 'stroke', 'dim', 'room'].filter((k) => layers[k] === false);
   const names = { photo: '写真ピン', memo: 'メモ', stroke: '手書き', dim: '寸法', room: '部屋範囲' };
 
@@ -88,7 +113,13 @@ export async function outputPdfDialog(project, layers, current) {
       h('div', { class: 'check-tools' },
         h('button', { class: 'link', type: 'button', onclick: () => checks.forEach((c) => { c.cb.checked = true; }) }, 'すべて選択'),
         h('button', { class: 'link', type: 'button', onclick: () => checks.forEach((c) => { c.cb.checked = false; }) }, 'すべて解除')),
-      h('label', { class: 'check-row' }, memoCb, h('span', {}, 'メモ一覧（Excel）も出力する')),
+      h('div', { class: 'label' }, '図面上のメモ'),
+      ...memoRadios,
+      h('div', { class: 'label' }, '一緒に出力するもの'),
+      h('label', { class: 'check-row' }, memoCb, h('span', {}, 'メモ一覧（Excel）')),
+      h('label', { class: 'check-row' }, ledgerCb, h('span', {}, '写真台帳（Excel）')),
+      ledgerImg,
+      h('div', { class: 'muted small' }, 'メモ一覧・写真台帳には、選んだページにあるメモ・写真だけが入ります。'),
       hidden.length
         ? h('div', { class: 'warn small' }, `表示切替で非表示：${hidden.map((k) => names[k]).join('・')}（出力されません）`)
         : null),
@@ -106,17 +137,37 @@ export async function outputPdfDialog(project, layers, current) {
   if (v !== 'ok') return;
   const pages = checks.filter((c) => c.cb.checked).map(({ drawing, pageIndex }) => ({ drawing, pageIndex }));
   const withMemo = memoCb.checked && !memoCb.disabled;
+  const withLedger = ledgerCb.checked && !ledgerCb.disabled;
+  const composite = rComp.checked;
+  try {
+    localStorage.setItem(PDF_OPTS_KEY, JSON.stringify({
+      memoStyle, withMemo: memoOn ? memoCb.checked : saved.withMemo, withLedger, composite,
+    }));
+  } catch { /* 保存できなくても出力は続ける */ }
 
-  const files = await run('図面PDFを作成中…', async (progress) => {
+  const keys = new Set(pages.map((p) => `${p.drawing.id}:${p.pageIndex}`));
+  const onPages = (o) => keys.has(`${o.drawingId}:${o.page}`);
+  // 進み具合の配分：PDF・メモ一覧・写真台帳
+  const wPdf = 1, wMemo = withMemo ? 0.15 : 0, wLedger = withLedger ? 0.6 : 0;
+  const total = wPdf + wMemo + wLedger;
+
+  const files = await run('出力中…', async (progress) => {
     const out = [];
-    const pdf = await exportDrawingsPdf(project, pages, layers, (r, l) => progress(withMemo ? r * 0.85 : r, l));
+    const pdf = await exportDrawingsPdf(project, pages, layers, (r, l) => progress((r * wPdf) / total, l), { memoStyle: memoOn ? memoStyle : 'tag' });
     out.push({ blob: pdf, name: fileName(project, '図面', 'pdf') });
     if (withMemo) {
-      const keys = new Set(pages.map((p) => `${p.drawing.id}:${p.pageIndex}`));
-      const memos = project.objects.filter((o) => o.type === 'memo' && keys.has(`${o.drawingId}:${o.page}`));
+      const memos = project.objects.filter((o) => o.type === 'memo' && onPages(o));
       if (memos.length) {
-        const xlsx = await exportMemoList(project, memos, (r) => progress(0.85 + r * 0.15, 'メモ一覧'));
+        const xlsx = await exportMemoList(project, memos, (r) => progress((wPdf + r * wMemo) / total, 'メモ一覧'));
         out.push({ blob: xlsx, name: fileName(project, 'メモ一覧', 'xlsx') });
+      }
+    }
+    if (withLedger) {
+      const list = photos.filter(onPages);
+      if (list.length) {
+        const xlsx = await exportPhotoLedger(project, { composite, photos: list },
+          (r, l) => progress((wPdf + wMemo + r * wLedger) / total, l));
+        out.push({ blob: xlsx, name: fileName(project, '写真台帳', 'xlsx') });
       }
     }
     return out;

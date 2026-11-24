@@ -33,6 +33,7 @@ export const LAYERS = [
 export class Viewer {
   /**
    * options.memoStyle: 'bubble'（図面：番号＋1行に省略）| 'tag'（PDF出力：番号のみ）
+   *                    | 'bubbleFull'（PDF出力：番号＋全文）
    *                    | 'full'（写真：全文を写真に固定した大きさで）
    * container=null で画面に出さない描画専用（出力用）になる
    */
@@ -575,18 +576,28 @@ export class Viewer {
     const pad = 6;
     const maxW = 180;
     const tag = this.memoStyle === 'tag';
+    const full = this.memoStyle === 'bubbleFull';
     ctx.font = '13px system-ui, sans-serif';
     const head = m.number ? m.number : '';
-    const body = tag ? '' : (m.text ? firstLine(m.text) : '');
-    const text = head || body ? truncate(ctx, [head, body].filter(Boolean).join(' '), maxW - pad * 2) : '';
+    let lines;
+    if (full) {
+      // 全文：番号のあとに本文を続け、幅で折り返す
+      const t = [head, m.text || ''].filter(Boolean).join(' ');
+      lines = t ? wrapText(ctx, t, 240 - pad * 2) : [];
+    } else {
+      const body = tag ? '' : (m.text ? firstLine(m.text) : '');
+      const text = head || body ? truncate(ctx, [head, body].filter(Boolean).join(' '), maxW - pad * 2) : '';
+      lines = text ? [text] : [];
+    }
     const hasHw = !tag && !!(m.handwriting && m.handwriting.strokes && m.handwriting.strokes.length);
     const thumbW = 96, thumbH = 64;
     let w = 0, h = pad * 2;
-    if (text) { w = Math.max(w, ctx.measureText(text).width); h += 16; }
-    if (hasHw) { w = Math.max(w, thumbW); h += thumbH + (text ? 4 : 0); }
-    if (!text && !hasHw) { w = 16; h += 16; }
+    for (const l of lines) w = Math.max(w, ctx.measureText(l).width);
+    h += lines.length * 16;
+    if (hasHw) { w = Math.max(w, thumbW); h += thumbH + (lines.length ? 4 : 0); }
+    if (!lines.length && !hasHw) { w = 16; h += 16; }
     w += pad * 2;
-    return { sx, sy, x: sx + 4, y: sy - h - 10, w, h, pad, lines: text ? [text] : [], lineH: 16, font: 13, hasHw, thumbW, thumbH, tail: true };
+    return { sx, sy, x: sx + 4, y: sy - h - 10, w, h, pad, lines, lineH: 16, font: 13, hasHw, thumbW, thumbH, tail: true };
   }
 
   /** 写真用：全文表示。大きさは写真に対する比率（拡大すると一緒に大きくなる） */
@@ -958,13 +969,16 @@ function truncate(ctx, text, maxW) {
   return chars.slice(0, lo).join('') + '…';
 }
 
+const NO_LINE_START = '、。，．,.）)」』】〕！？!?ー・：:；;ぁぃぅぇぉっゃゅょァィゥェォッャュョ';
+
 /** 改行と幅で折り返す（日本語は1文字単位） */
 export function wrapText(ctx, text, maxW) {
   const out = [];
   for (const para of text.split(/\r?\n/)) {
     let line = '';
     for (const ch of para) {
-      if (line && ctx.measureText(line + ch).width > maxW) { out.push(line); line = ch; }
+      // 句読点・閉じかっこは行頭に来ないよう、前の行の末尾にぶら下げる
+      if (line && ctx.measureText(line + ch).width > maxW && !NO_LINE_START.includes(ch)) { out.push(line); line = ch; }
       else line += ch;
     }
     out.push(line);

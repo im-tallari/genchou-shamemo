@@ -28,14 +28,15 @@ function releaseCanvas(c) {
 }
 
 /**
+ * memoStyle: 'tag'（番号のみ）| 'bubble'（番号＋1行目）| 'bubbleFull'（番号＋全文）
  * 図面1ページ分の書き込み（写真ピン・メモ番号・手書き・寸法・部屋）を透明画像に描く。
  * 何も描かれていない余白は切り落とす。
  * pxPerUnit: 図面座標1単位あたりの画素数 / ui: ピン等の倍率
  * 戻り値: { blob, x, y, w, h }（画素。図面左上が原点）または null
  */
-export async function renderOverlay(project, drawing, pageIndex, { pxPerUnit, ui, layers }) {
+export async function renderOverlay(project, drawing, pageIndex, { pxPerUnit, ui, layers, memoStyle = 'tag' }) {
   const page = drawing.pages[pageIndex];
-  const v = new Viewer(null, { memoStyle: 'tag' });
+  const v = new Viewer(null, { memoStyle });
   v.page = page;
   v.drawingId = drawing.id;
   v.pageIndex = pageIndex;

@@ -84,11 +84,17 @@ export async function outputPdfDialog(project, layers, current) {
   const memoOn = layers.memo !== false;
   const memoStyles = [['tag', '番号のみ'], ['bubble', '番号＋1行目（画面と同じ）'], ['bubbleFull', '番号＋全文']];
   let memoStyle = memoStyles.some(([k]) => k === saved.memoStyle) ? saved.memoStyle : 'tag';
+  const commentCb = h('input', { type: 'checkbox', checked: saved.embedComments !== false, disabled: !memoOn });
+  const commentRow = h('div', { class: 'sub-options' },
+    h('label', { class: 'check-row' }, commentCb, h('span', {}, 'メモを PDF のコメントとして埋め込む')),
+    h('div', { class: 'muted small' }, '番号の横に付箋が付き、PDF アプリで本文を読めます（手書きは入りません）'));
+  const syncComment = () => { commentRow.hidden = memoStyle !== 'tag' || !memoOn; };
   const memoRadios = memoStyles.map(([k, label]) => {
     const r = h('input', { type: 'radio', name: 'pdf-memo-style', checked: k === memoStyle, disabled: !memoOn });
-    r.addEventListener('change', () => { if (r.checked) memoStyle = k; });
+    r.addEventListener('change', () => { if (r.checked) { memoStyle = k; syncComment(); } });
     return h('label', { class: 'check-row' }, r, h('span', {}, label));
   });
+  syncComment();
 
   const memoCb = h('input', { type: 'checkbox', checked: memoOn && saved.withMemo !== false, disabled: !memoOn });
   const photos = project.objects.filter((o) => o.type === 'photo');
@@ -114,7 +120,7 @@ export async function outputPdfDialog(project, layers, current) {
         h('button', { class: 'link', type: 'button', onclick: () => checks.forEach((c) => { c.cb.checked = true; }) }, 'すべて選択'),
         h('button', { class: 'link', type: 'button', onclick: () => checks.forEach((c) => { c.cb.checked = false; }) }, 'すべて解除')),
       h('div', { class: 'label' }, '図面上のメモ'),
-      ...memoRadios,
+      memoRadios[0], commentRow, memoRadios[1], memoRadios[2],
       h('div', { class: 'label' }, '一緒に出力するもの'),
       h('label', { class: 'check-row' }, memoCb, h('span', {}, 'メモ一覧（Excel）')),
       h('label', { class: 'check-row' }, ledgerCb, h('span', {}, '写真台帳（Excel）')),
@@ -142,6 +148,7 @@ export async function outputPdfDialog(project, layers, current) {
   try {
     localStorage.setItem(PDF_OPTS_KEY, JSON.stringify({
       memoStyle, withMemo: memoOn ? memoCb.checked : saved.withMemo, withLedger, composite,
+      embedComments: memoOn ? commentCb.checked : saved.embedComments,
     }));
   } catch { /* 保存できなくても出力は続ける */ }
 
@@ -153,7 +160,10 @@ export async function outputPdfDialog(project, layers, current) {
 
   const files = await run('出力中…', async (progress) => {
     const out = [];
-    const pdf = await exportDrawingsPdf(project, pages, layers, (r, l) => progress((r * wPdf) / total, l), { memoStyle: memoOn ? memoStyle : 'tag' });
+    const pdf = await exportDrawingsPdf(project, pages, layers, (r, l) => progress((r * wPdf) / total, l), {
+      memoStyle: memoOn ? memoStyle : 'tag',
+      embedComments: memoOn && memoStyle === 'tag' && commentCb.checked,
+    });
     out.push({ blob: pdf, name: fileName(project, '図面', 'pdf') });
     if (withMemo) {
       const memos = project.objects.filter((o) => o.type === 'memo' && onPages(o));

@@ -1,7 +1,7 @@
 // 編集画面：図面表示・ツールバー・メニュー
 
 import * as db from '../db.js';
-import { uid, normalizeProject, PEN_WIDTHS, HL_WIDTHS, DIM_FIELDS, DIM_LABEL, toggleDimField } from '../model.js';
+import { uid, normalizeProject, PEN_WIDTHS, HL_WIDTHS, DIM_FIELDS, DIM_LABEL, toggleDimField, MARKER_SIZES, markerMM } from '../model.js';
 import { ProjectStore } from '../project-store.js';
 import { Viewer, LAYERS } from '../viewer.js';
 import { openSource, analyze, detectType } from '../drawing-source.js';
@@ -171,6 +171,7 @@ export class EditorScreen {
     });
     this.store.collectGarbage().catch((e) => console.warn(e));
     this.viewMemory.clear();
+    this.viewer.markerMM = markerMM(project);
     this.root.hidden = false;
     this.setTool(this.settings.tool);
     this._updateHeader();
@@ -192,6 +193,7 @@ export class EditorScreen {
   }
 
   _onStoreChange() {
+    this.viewer.markerMM = markerMM(this.store.project);
     this.tools.select.sync();
     this.viewer.requestRedraw();
     this._updateHeader();
@@ -494,11 +496,18 @@ export class EditorScreen {
       });
       return h('label', { class: 'switch-row' }, h('span', {}, l.label), cb);
     });
+    // 写真ピン・メモ・部屋名の大きさ（プロジェクトごと。図面に連動し、PDF にも反映）
+    const sizeSeg = segmented(MARKER_SIZES.map((x) => [x.id, x.label]), this.store.project.settings.markerSize || 'm', (id) => {
+      this.store.mutate((p) => { p.settings.markerSize = id; }, { undoable: false });
+    });
     await modal({
       title: '表示切替',
       className: 'modal-narrow',
       body: h('div', { class: 'form' }, ...rows,
-        h('div', { class: 'muted small' }, '非表示のものはタップ・選択・消しゴムの対象になりません。')),
+        h('div', { class: 'muted small' }, '非表示のものはタップ・選択・消しゴムの対象になりません。'),
+        h('div', { class: 'label' }, '写真ピン・メモ・部屋名の大きさ'),
+        sizeSeg,
+        h('div', { class: 'muted small' }, '図面に連動して拡大・縮小します。「中」で A3 の紙に印刷したときの写真ピンの高さが約4mmです。PDF 出力にも反映され、このプロジェクトに保存されます。')),
       buttons: [
         {
           label: 'すべて表示',

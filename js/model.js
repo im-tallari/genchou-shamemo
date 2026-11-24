@@ -19,7 +19,7 @@ export function createProject(name, photoNumbering = 'sequential') {
     name: name || '無題のプロジェクト',
     createdAt: now,
     updatedAt: now,
-    settings: { photoNumbering },
+    settings: { photoNumbering, markerSize: 'm' },
     // 写真番号の採番カウンタ。元に戻すの対象外（番号は再利用しない）
     counters: { sequential: 0, daily: {}, memo: 0 },
     drawings: [],
@@ -30,7 +30,7 @@ export function createProject(name, photoNumbering = 'sequential') {
 
 /** 古い形式・欠けたフィールドを補う */
 export function normalizeProject(p) {
-  p.settings = { photoNumbering: 'sequential', ...(p.settings || {}) };
+  p.settings = { photoNumbering: 'sequential', markerSize: 'm', ...(p.settings || {}) };
   p.counters = p.counters || { sequential: 0, daily: {} };
   p.counters.daily = p.counters.daily || {};
   p.drawings = p.drawings || [];
@@ -180,6 +180,19 @@ export const HL_WIDTHS = [
   { label: '極太', value: 22 },
 ];
 export const HL_ALPHA = 0.35;
+
+// 写真ピン・メモ・部屋名の大きさ（A3 の紙での写真ピンの高さ mm）。図面に連動して拡大・縮小する
+export const MARKER_SIZES = [
+  { id: 'xs', label: '極小', mm: 2 },
+  { id: 's', label: '小', mm: 3 },
+  { id: 'm', label: '中', mm: 4 },
+  { id: 'l', label: '大', mm: 6 },
+  { id: 'xl', label: '特大', mm: 8 },
+];
+export function markerMM(project) {
+  const s = MARKER_SIZES.find((x) => x.id === (project && project.settings && project.settings.markerSize));
+  return (s || MARKER_SIZES[2]).mm;
+}
 
 // ---- 寸法 ----
 // Dimension { id, type:'dim', drawingId, page, shape, p1, p2, fields, values, color }

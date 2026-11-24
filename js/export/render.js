@@ -31,17 +31,18 @@ function releaseCanvas(c) {
  * memoStyle: 'tag'（番号のみ）| 'bubble'（番号＋1行目）| 'bubbleFull'（番号＋全文）
  * 図面1ページ分の書き込み（写真ピン・メモ番号・手書き・寸法・部屋）を透明画像に描く。
  * 何も描かれていない余白は切り落とす。
- * pxPerUnit: 図面座標1単位あたりの画素数 / ui: ピン等の倍率
+ * pxPerUnit: 図面座標1単位あたりの画素数 / markerMM: ピン等の大きさ / lineScale: 部屋の枠線などの太さの倍率
  * 戻り値: { blob, x, y, w, h }（画素。図面左上が原点）または null
  */
-export async function renderOverlay(project, drawing, pageIndex, { pxPerUnit, ui, layers, memoStyle = 'tag' }) {
+export async function renderOverlay(project, drawing, pageIndex, { pxPerUnit, markerMM = 4, lineScale = 1, layers, memoStyle = 'tag' }) {
   const page = drawing.pages[pageIndex];
   const v = new Viewer(null, { memoStyle });
   v.page = page;
   v.drawingId = drawing.id;
   v.pageIndex = pageIndex;
   v.view = { scale: pxPerUnit, ox: 0, oy: 0 };
-  v.ui = ui;
+  v.markerMM = markerMM;
+  v.lineScale = lineScale;
   v.layers = layers;
   v.objectSource = () => project.objects.filter((o) => o.drawingId === drawing.id && o.page === pageIndex);
   v.roomSource = () => project.rooms.filter((r) => r.drawingId === drawing.id && r.page === pageIndex);

@@ -11,6 +11,8 @@ const LONG_PRESS_MS = 500;
 const DETAIL_DELAY = 160;    // ズーム後に高解像度で描き直すまでの待ち(ms)
 const MAX_DETAIL_PIXELS = 12e6;
 const HIT = 10;              // タップ判定の余裕(画面px)
+const MIN_TAP = 24;          // 小さく表示されていても、この大きさ(画面px)まではタップできる
+const PIN_PX = 22;           // 写真ピンの高さ（倍率1のとき）
 
 export const ROOM_COLOR = '#00897b';
 export const PIN_COLOR = '#d32f2f';
@@ -41,7 +43,10 @@ export class Viewer {
     this.container = container;
     this.memoStyle = memoStyle;
     this.unitBase = unitBase;
-    this.ui = 1; // 画面上で一定の大きさのもの（ピン・吹き出し・部屋名）の倍率。出力時に使う
+    // 写真ピン・吹き出し・部屋名の大きさ：A3 の紙での写真ピンの高さ(mm)。図面に連動する
+    this.markerMM = 4;
+    // 部屋の枠線など、画面上で一定の太さにする線の倍率（出力時に変える）
+    this.lineScale = 1;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'viewer-canvas';
     if (container) container.appendChild(this.canvas);
@@ -118,6 +123,13 @@ export class Viewer {
 
   clearPage() {
     this.setPage(null, null, 0);
+  }
+
+  /** 写真ピン・吹き出し・部屋名の倍率（PIN_PX の何倍で描くか）。図面の拡大率に連動 */
+  get ui() {
+    if (!this.page) return 1;
+    const pinUnits = (this.markerMM / 25.4) * 72 * unitScale(this.page);
+    return (pinUnits * this.view.scale) / PIN_PX;
   }
 
   /** 線の太さ・文字の大きさの基準（図面は A3 長辺 = 1190.55 を 1 とする） */
@@ -349,10 +361,10 @@ export class Viewer {
       ctx.fillStyle = 'rgba(0,137,123,0.08)';
       ctx.fill();
     }
-    const ui = this.ui;
+    const ui = this.ui, ls = this.lineScale;
     ctx.strokeStyle = ROOM_COLOR;
-    ctx.lineWidth = 2 * ui;
-    ctx.setLineDash([6 * ui, 4 * ui]);
+    ctx.lineWidth = 2 * ls;
+    ctx.setLineDash([6 * ls, 4 * ls]);
     ctx.stroke();
     ctx.setLineDash([]);
     if (draft) {
@@ -370,6 +382,7 @@ export class Viewer {
       ctx.textBaseline = 'middle';
       ctx.lineWidth = 4 * ui;
       ctx.strokeStyle = 'rgba(255,255,255,.9)';
+      if (13 * ui < 2) { ctx.restore(); return; } // 小さすぎて読めないときは描かない
       ctx.strokeText(room.name, cx, cy);
       ctx.fillStyle = ROOM_COLOR;
       ctx.fillText(room.name, cx, cy);
@@ -398,7 +411,7 @@ export class Viewer {
   _dimLayout(ctx, d) {
     const u = this.unit();
     const font = DIM_TEXT_PT * u * this.view.scale; // 図面に連動
-    const lw = Math.max(this.ui, 0.6 * u * this.view.scale);
+    const lw = Math.max(this.lineScale, 0.6 * u * this.view.scale);
     const gap = font * 0.35;
     const f = (k) => (d.fields || []).includes(k);
     const hText = f('H') ? dimText(d, 'H') : '';
@@ -517,9 +530,12 @@ export class Viewer {
     return m ? `${m[2]}-${m[3]}` : n;
   }
 
+  /** 写真ピンの画面上の枠（倍率込み） */
   _pinBox(ctx, o) {
     const [sx, sy] = this.toScreen(o.x, o.y);
-    return this._pinBoxAt(ctx, o, sx, sy);
+    const b = this._pinBoxAt(ctx, o, 0, 0);
+    const k = this.ui;
+    return { sx, sy, x: sx + b.x * k, y: sy + b.y * k, w: b.w * k, h: b.h * k };
   }
 
   _pinBoxAt(ctx, o, sx, sy) {
@@ -566,10 +582,13 @@ export class Viewer {
 
   // ---- メモ ----
 
+  /** メモの画面上の枠（倍率込み） */
   _memoBox(ctx, m) {
     if (this.memoStyle === 'full') return this._memoBoxFull(ctx, m);
     const [sx, sy] = this.toScreen(m.x, m.y);
-    return this._memoBoxBubble(ctx, m, sx, sy);
+    const b = this._memoBoxBubble(ctx, m, 0, 0);
+    const k = this.ui;
+    return { ...b, sx, sy, x: sx + b.x * k, y: sy + b.y * k, w: b.w * k, h: b.h * k, tailH: 10 * k };
   }
 
   _memoBoxBubble(ctx, m, sx, sy) {
@@ -676,15 +695,16 @@ export class Viewer {
     const rev = (t) => objs.filter((o) => o.type === t).reverse();
     if (types.includes('photo')) {
       for (const o of rev('photo')) {
-        const b = this._pinBox(ctx, o);
+        const b = growTo(this._pinBox(ctx, o), MIN_TAP);
         if (sx >= b.x - 6 && sx <= b.x + b.w + 6 && sy >= b.y - 6 && sy <= b.y + b.h + 6) return o;
       }
     }
     if (types.includes('memo')) {
       for (const o of rev('memo')) {
-        const b = this._memoBox(ctx, o);
-        if ((sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h + (b.tail ? 10 : 0)) ||
-            Math.hypot(sx - b.sx, sy - b.sy) < 10) return o;
+        const b0 = this._memoBox(ctx, o);
+        const b = growTo({ ...b0, h: b0.h + (b0.tail ? b0.tailH : 0) }, MIN_TAP);
+        if ((sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) ||
+            Math.hypot(sx - b0.sx, sy - b0.sy) < MIN_TAP / 2) return o;
       }
     }
     if (types.includes('dim')) {
@@ -856,6 +876,12 @@ export class Viewer {
 }
 
 // ---- 描画ヘルパー ----
+
+/** 枠が小さすぎるときは、中心を保ったまま最低限の大きさに広げる */
+function growTo(b, min) {
+  const w = Math.max(b.w, min), h = Math.max(b.h, min);
+  return { ...b, x: b.x - (w - b.w) / 2, y: b.y - (h - b.h) / 2, w, h };
+}
 
 function pad(b, m) {
   return { x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 };

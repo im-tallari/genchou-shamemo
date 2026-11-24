@@ -5,10 +5,11 @@ import * as db from '../db.js';
 import { APP_NAME } from '../version.js';
 import { loadPdfLib } from './lazy.js';
 import { renderOverlay, MAX_CANVAS_PIXELS } from './render.js';
+import { markerMM as getMarkerMM, unitScale } from '../model.js';
 
 const A3 = [1190.55, 841.89];          // 横（pt）
 const TARGET_DPI = 300;
-const PIN_MM_ON_A3 = 4;                // A3 でのピンの高さ
+const LINE_REF_MM = 4;                 // 部屋の枠線などの太さの基準（ピン 4mm 相当の倍率）
 const PIN_PX = 22;                     // 画面でのピンの高さ(px)
 const IMAGE_MARGIN = 20;               // 画像図面の余白(pt)
 
@@ -79,9 +80,11 @@ export async function exportDrawingsPdf(project, pages, layers, onProgress = () 
     const areaPt = pg.width * kpt * pg.height * kpt;
     const pxPerPt = Math.min(TARGET_DPI / 72, Math.sqrt(MAX_CANVAS_PIXELS / areaPt));
     const pxPerUnit = pxPerPt * kpt;
-    const pinPt = (PIN_MM_ON_A3 / 25.4) * 72 * (Math.max(PW, PH) / A3[0]);
-    const ui = (pinPt * pxPerPt) / PIN_PX;
-    const ov = await renderOverlay(project, drawing, pageIndex, { pxPerUnit, ui, layers, memoStyle });
+    // ピン等の大きさは画面と同じく図面に連動（プロジェクトの設定）
+    const mm = getMarkerMM(project);
+    const ui = ((mm / 25.4) * 72 * unitScale(pg) * pxPerUnit) / PIN_PX;
+    const lineScale = (((LINE_REF_MM / 25.4) * 72 * (Math.max(PW, PH) / A3[0])) * pxPerPt) / PIN_PX;
+    const ov = await renderOverlay(project, drawing, pageIndex, { pxPerUnit, markerMM: mm, lineScale, layers, memoStyle });
     if (ov) {
       const png = await out.embedPng(new Uint8Array(await ov.blob.arrayBuffer()));
       const w = ov.w / pxPerPt, h = ov.h / pxPerPt;

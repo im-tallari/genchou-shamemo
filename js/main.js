@@ -4,6 +4,7 @@ import { HomeScreen } from './ui/home.js';
 import { EditorScreen } from './ui/editor.js';
 import { showInstallGuide } from './ui/install.js';
 import { alertDialog, h } from './ui/dialogs.js';
+import { registerSW, applyUpdate } from './update.js';
 
 const app = {
   home: null,
@@ -41,23 +42,10 @@ async function start() {
   else await app.home.show();
 
   showInstallGuide();
-  registerSW();
-}
-
-function registerSW() {
-  if (!('serviceWorker' in navigator)) return;
-  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
-  const hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register('./sw.js').then((reg) => {
-    // 起動中に更新があれば知らせる
-    reg.addEventListener('updatefound', () => {
-      const w = reg.installing;
-      if (!w) return;
-      w.addEventListener('statechange', () => {
-        if (w.state === 'activated' && hadController) showUpdateBanner();
-      });
-    });
-  }).catch((e) => console.warn('SW 登録に失敗', e));
+  registerSW({
+    onUpdateReady: showUpdateBanner,
+    beforeReload: async () => { if (app.editor && app.editor.store) await app.editor.store.flush(); },
+  });
 }
 
 function showUpdateBanner() {
@@ -66,10 +54,7 @@ function showUpdateBanner() {
     h('span', {}, '新しいバージョンがあります'),
     h('button', {
       class: 'btn small primary',
-      onclick: async () => {
-        if (app.editor && app.editor.store) await app.editor.store.flush();
-        location.reload();
-      },
+      onclick: () => applyUpdate(),
     }, '更新'),
     h('button', { class: 'btn small', onclick: () => bar.remove() }, 'あとで'));
   document.body.appendChild(bar);

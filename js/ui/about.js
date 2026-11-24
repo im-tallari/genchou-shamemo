@@ -1,7 +1,8 @@
 // 「このアプリについて」：版・著作権・ライセンス・ソースコードの案内
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { h, modal } from './dialogs.js';
+import { h, modal, toast } from './dialogs.js';
+import { checkForUpdate, applyUpdate, isSupported } from '../update.js';
 import { APP_NAME, APP_VERSION, COPYRIGHT, SOURCE_URL, LICENSE_URL } from '../version.js';
 
 const THIRD_PARTY = [
@@ -14,6 +15,7 @@ const THIRD_PARTY = [
 const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener' }, text || href);
 
 export async function showAbout() {
+  let ready = false;
   await modal({
     title: 'このアプリについて',
     body: h('div', { class: 'form about' },
@@ -30,6 +32,27 @@ export async function showAbout() {
       h('div', { class: 'label' }, '使用しているライブラリ'),
       h('ul', { class: 'about-libs' }, THIRD_PARTY.map((l) =>
         h('li', {}, link(l.url, l.name), ` ${l.version}　${l.license}`)))),
-    buttons: [{ label: '閉じる', kind: 'primary', value: null }],
+    buttons: [
+      isSupported() ? {
+        label: '更新を確認',
+        onClick: async (close, btn) => {
+          if (ready) { applyUpdate(); return; }
+          btn.disabled = true;
+          btn.textContent = '確認中…';
+          const r = await checkForUpdate();
+          btn.disabled = false;
+          btn.textContent = '更新を確認';
+          if (r === 'found') {
+            ready = true;
+            btn.textContent = '再読み込みして更新';
+            btn.classList.add('primary');
+            toast('新しいバージョンを取り込みました');
+          } else if (r === 'latest') toast(`最新のバージョン（${APP_VERSION}）です`);
+          else if (r === 'offline') toast('インターネットにつながっていないため確認できません');
+          else toast('更新を確認できませんでした。しばらくしてからもう一度お試しください');
+        },
+      } : null,
+      { label: '閉じる', kind: 'primary', value: null },
+    ].filter(Boolean),
   });
 }
